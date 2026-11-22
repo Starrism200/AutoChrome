@@ -1,0 +1,18 @@
+# build output
+/bin/
+
+# runtime data
+/data/
+/profiles/
+/tmp/
+
+# logs and media
+*.log
+*.mp4
+*.mov
+*.png
+*.jpg
+*.jpeg
+
+# local environment
+.env
