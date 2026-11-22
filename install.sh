@@ -23,6 +23,7 @@ command -v x11vnc >/dev/null 2>&1 || packages+=(x11vnc)
 command -v websockify >/dev/null 2>&1 || packages+=(websockify)
 [ -d /usr/share/novnc ] || packages+=(novnc)
 command -v curl >/dev/null 2>&1 || packages+=(curl)
+command -v dpkg-deb >/dev/null 2>&1 || packages+=(dpkg)
 dpkg -s fonts-liberation >/dev/null 2>&1 || packages+=(fonts-liberation)
 dpkg -s ca-certificates >/dev/null 2>&1 || packages+=(ca-certificates)
 if [ "${#packages[@]}" -gt 0 ]; then
@@ -43,6 +44,8 @@ if ! command -v "$GO_BIN" >/dev/null 2>&1; then
   echo "Install Go 1.26+ or set GO_BIN=/path/to/go" >&2
   exit 1
 fi
+
+mkdir -p /opt/autochrome/chrome
 
 echo "==> building $BIN_DIR/autochrome"
 build

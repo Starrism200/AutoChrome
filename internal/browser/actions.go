@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -463,18 +464,63 @@ func SetCookies(ctx context.Context, cookies []*network.CookieParam) error {
 	return err
 }
 
-// SetUserAgent overrides the user agent for the current target.
+var chromeMajorRe = regexp.MustCompile(`Chrome/(\d+)`)
+
+// SetUserAgent overrides the user agent for the current target and rebuilds a
+// matching UA-CH metadata set from the Chrome major version.
 func SetUserAgent(ctx context.Context, userAgent, acceptLanguage, platform string) error {
 	if userAgent == "" {
 		return fmt.Errorf("user agent is required")
 	}
 	params := emulation.SetUserAgentOverrideParams{UserAgent: userAgent, AcceptLanguage: acceptLanguage}
-	if platform != "" {
-		params.Platform = platform
+	if platform == "" {
+		switch {
+		case strings.Contains(userAgent, "Macintosh"):
+			platform = "MacIntel"
+		case strings.Contains(userAgent, "Linux"):
+			platform = "Linux x86_64"
+		default:
+			platform = "Win32"
+		}
+	}
+	params.Platform = platform
+	if m := chromeMajorRe.FindStringSubmatch(userAgent); len(m) == 2 {
+		major := m[1]
+		params.UserAgentMetadata = &emulation.UserAgentMetadata{
+			Brands: []*emulation.UserAgentBrandVersion{
+				{Brand: "Not_A Brand", Version: "24"},
+				{Brand: "Chromium", Version: major},
+				{Brand: "Google Chrome", Version: major},
+			},
+			FullVersionList: []*emulation.UserAgentBrandVersion{
+				{Brand: "Not_A Brand", Version: "24.0.0.0"},
+				{Brand: "Chromium", Version: major + ".0.0.0"},
+				{Brand: "Google Chrome", Version: major + ".0.0.0"},
+			},
+			Platform:        metaPlatform(platform),
+			PlatformVersion: uaPlatformVersion(platform),
+			Architecture:    "x86",
+			Mobile:          false,
+			Bitness:         "64",
+		}
+		if strings.Contains(platform, "Mac") {
+			params.UserAgentMetadata.Architecture = "arm"
+		}
 	}
 	_, err := chromedp.Run(ctx, func(ctx context.Context, t *chromedp.Target) (chromedp.Void, error) {
 		_, e := cdp.Call(ctx, t, emulation.SetUserAgentOverride, params)
 		return chromedp.Void{}, e
 	})
 	return err
+}
+
+func uaPlatformVersion(platform string) string {
+	switch {
+	case strings.Contains(platform, "Mac"):
+		return "14.0.0"
+	case strings.Contains(platform, "Linux"):
+		return "6.5.0"
+	default:
+		return "10.0.0"
+	}
 }

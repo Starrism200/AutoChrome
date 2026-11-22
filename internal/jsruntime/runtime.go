@@ -131,7 +131,7 @@ func (r *Runner) buildAC(vm *goja.Runtime) *goja.Object {
 	_ = ac.Set("open", func(call goja.FunctionCall) goja.Value {
 		opts := objectArg(call, 0)
 		id := stringOpt(opts, "env", "id")
-		s, err := r.Manager.Open(id, stringOpt(opts, "platform"), stringOpt(opts, "url"), stringOpt(opts, "proxy"), boolOpt(opts, "headless"))
+		s, err := r.Manager.Open(id, stringOpt(opts, "platform"), stringOpt(opts, "url"), stringOpt(opts, "proxy"), boolOpt(opts, "headless"), stringOpt(opts, "chromeVersion", "chrome_version"))
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}
@@ -183,6 +183,11 @@ func (r *Runner) buildAC(vm *goja.Runtime) *goja.Object {
 			panic(vm.NewGoError(err))
 		}
 		if meta, ok := envdir.ReadMeta(dir); ok {
+			if cv := stringOpt(opts, "chromeVersion", "chrome_version"); cv != "" {
+				if updated, err := envdir.SetChromeDir(dir, meta, cv); err == nil {
+					meta = updated
+				}
+			}
 			_ = r.Registry.Put(meta)
 		}
 		return vm.ToValue(map[string]any{"dir": dir, "fingerprint": fp})

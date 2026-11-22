@@ -173,6 +173,9 @@ func within(root, target string) bool {
 }
 
 func skipRuntimeFile(name string) bool {
+	if strings.HasPrefix(name, ".tmp-") {
+		return true
+	}
 	switch name {
 	case "SingletonLock", "SingletonSocket", "SingletonCookie", "DevToolsActivePort", ".autochrome.lock":
 		return true

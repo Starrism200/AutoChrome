@@ -19,6 +19,9 @@
 --allow-scripts        # 强制开启脚本运行
 ```
 
+公网访问（尤其是 VNC token）时使用 `--addr 0.0.0.0:8787` 或放在 TLS
+反向代理后面。
+
 首次启动会生成 token 并写入：
 
 ```text
@@ -69,7 +72,10 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/health` | 健康检查（无需认证） |
+| GET | `/api/v1/openapi.yaml` | OpenAPI 文档（无需认证） |
 | GET | `/api/v1/user` | 当前用户与配置 |
+| POST | `/api/v1/token/rotate` | 轮换 API token，返回新 token |
+| GET | `/api/v1/events` | SSE 事件流 |
 
 ### 存储
 
@@ -125,7 +131,8 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/sessions` | 存活会话列表 |
-| POST | `/api/v1/sessions` | 打开会话 `{env, platform?, url?, proxy?, proxy_id?, headless?}` |
+| POST | `/api/v1/sessions` | 打开会话 `{env, platform?, url?, proxy?, proxy_id?, chrome_version?, headless?}` |
+| POST | `/api/v1/sessions/batch` | 批量打开 `{envs, url?, proxy_id?, chrome_version?, headless?}` |
 | DELETE | `/api/v1/sessions` | 关闭所有会话 |
 | GET | `/api/v1/sessions/{id}` | 会话信息 |
 | DELETE | `/api/v1/sessions/{id}` | 关闭会话 |
@@ -151,6 +158,24 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | GET | `/api/v1/sessions/{id}/qr` | 返回二维码 PNG |
 | POST | `/api/v1/sessions/{id}/click_xy` | `{x, y}` |
 | POST | `/api/v1/sessions/{id}/scroll` | `{dx, dy}` |
+
+### Chrome 版本
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/chrome` | 当前 Chrome 版本与目录 |
+| GET | `/api/v1/chrome/versions` | 已安装的托管版本 |
+| POST | `/api/v1/chrome/update` | 下载并安装最新稳定版 |
+| POST | `/api/v1/chrome/install` | 上传 `.deb`（multipart `file`）或 `{url}` |
+| PUT | `/api/v1/chrome/use` | 设置全局默认版本 `{version}` |
+| DELETE | `/api/v1/chrome/versions/{version}` | 删除托管版本 |
+| PUT | `/api/v1/envs/{id}/chrome` | 为环境绑定版本 `{version}` |
+| DELETE | `/api/v1/envs/{id}/chrome` | 解除环境版本绑定 |
+| PUT | `/api/v1/user/chrome` | 设置用户默认版本 `{version}` |
+| DELETE | `/api/v1/user/chrome` | 取消用户默认版本 |
+
+版本目录默认 `/opt/autochrome/chrome`，可用 `AUTOCHROME_CHROME_DIR` 覆盖。
+`version` 可以是托管版本号、`system` 或 `default`。
 
 ### 附件
 
@@ -226,7 +251,13 @@ UA 通过 CDP `Emulation.setUserAgentOverride` 设置，属于字符串级覆盖
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/desktop` | noVNC 地址与端口（启用 `--vnc` 时） |
+| GET | `/api/v1/desktop` | 本地 noVNC 地址与端口（启用 `--vnc` 时） |
+| POST | `/api/v1/desktop/token` | 生成公网 noVNC token，返回 `/vnc/{token}/...` |
+| GET | `/vnc/{token}/...` | 代理 noVNC 页面、静态资源和 WebSocket |
+
+token 默认 **300 秒无动作自动失效并断开**，可用
+`AUTOCHROME_VNC_IDLE_SECONDS` 调整。VNC 端口仍只监听 `127.0.0.1`，
+公网访问统一走 API 端口，建议放在 TLS 反向代理后面。
 
 ## 5. 示例
 
@@ -340,18 +371,37 @@ curl -s -H "$H" "$BASE/sessions/$SID/screenshot?json=1&name=shot.png"
 `wait`、脚本、截图等可能耗时较长。HTTP server 不设置写超时，但建议客户端
 自己设置合理超时，并在业务层使用 `timeout_ms`。
 
-## 10. 尚未提供
+## 10. 事件流与调度
 
-以下是常见但当前未内置的接口，可按需增加：
+### 事件流
 
-- 会话事件/日志流（SSE/WebSocket）
-- 批量打开会话
-- 代理健康历史、自动轮换
-- API token 轮换
-- OpenAPI/Swagger 文档
-- 任务调度（定时脚本/定时打开）
+`GET /api/v1/events` 返回 `text/event-stream`，事件包括
+`session.opened`、`session.closed`、`env.created`、`env.deleted`、
+`proxy.*`、`storage.updated`、`attachment.*`、`schedule.*`、`token.rotated` 等。
+浏览器端建议用 `fetch` 流式读取并携带 Bearer token。
 
-## 11. 安全
+### 调度
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/schedules` | 任务列表 |
+| POST | `/api/v1/schedules` | 新增任务 |
+| GET | `/api/v1/schedules/{id}` | 任务详情 |
+| PATCH | `/api/v1/schedules/{id}` | 修改任务 |
+| DELETE | `/api/v1/schedules/{id}` | 删除任务 |
+| POST | `/api/v1/schedules/{id}/run` | 立即执行一次 |
+
+任务类型：`script`（运行脚本）、`open`（定时打开环境）、`close`（关闭环境）。
+`interval_seconds` 最小 5 秒。
+
+## 11. 其他限制
+
+- 隔离级别仍是 L2（每用户一个进程），不是 OS 用户/容器级隔离
+- 不内置第三方打码服务
+- 旧版 Chrome 需要自行提供 `.deb` 后通过 `/chrome/install` 安装
+- 远程 VNC 需要 API 端口可达，并建议配置 TLS 反向代理
+
+## 12. 安全
 
 - 默认只监听 `127.0.0.1`
 - 必须携带 token

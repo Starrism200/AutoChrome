@@ -214,26 +214,29 @@ func (s *Server) listEnvs() []envdir.Meta {
 // ---- browser lifecycle ----
 
 type BrowserOpenIn struct {
-	Env      string `json:"env" jsonschema:"environment id"`
-	Platform string `json:"platform,omitempty" jsonschema:"directory prefix (default: default)"`
-	URL      string `json:"url,omitempty" jsonschema:"initial page to open"`
-	Proxy    string `json:"proxy,omitempty" jsonschema:"proxy address, e.g. socks5://127.0.0.1:10801"`
-	Headless bool   `json:"headless,omitempty" jsonschema:"run Chrome headless instead of on Xvfb"`
+	Env           string `json:"env" jsonschema:"environment id"`
+	Platform      string `json:"platform,omitempty" jsonschema:"directory prefix (default: default)"`
+	URL           string `json:"url,omitempty" jsonschema:"initial page to open"`
+	Proxy         string `json:"proxy,omitempty" jsonschema:"proxy address, e.g. socks5://127.0.0.1:10801"`
+	ChromeVersion string `json:"chrome_version,omitempty" jsonschema:"managed Chrome version, e.g. 156.0.8078.79"`
+	Headless      bool   `json:"headless,omitempty" jsonschema:"run Chrome headless instead of on Xvfb"`
 }
 
 type BrowserOpenOut struct {
-	SessionID string `json:"session_id"`
-	Env       string `json:"env"`
-	URL       string `json:"url,omitempty"`
-	Title     string `json:"title,omitempty"`
+	SessionID     string `json:"session_id"`
+	Env           string `json:"env"`
+	URL           string `json:"url,omitempty"`
+	Title         string `json:"title,omitempty"`
+	ChromeVersion string `json:"chrome_version,omitempty"`
 }
 
 func (s *Server) browserOpen(_ context.Context, _ *mcp.CallToolRequest, in BrowserOpenIn) (*mcp.CallToolResult, BrowserOpenOut, error) {
-	sess, err := s.Manager.Open(in.Env, in.Platform, in.URL, in.Proxy, in.Headless)
+	sess, err := s.Manager.Open(in.Env, in.Platform, in.URL, in.Proxy, in.Headless, in.ChromeVersion)
 	if err != nil {
 		return nil, BrowserOpenOut{}, err
 	}
-	out := BrowserOpenOut{SessionID: sess.ID, Env: sess.EnvID, URL: in.URL}
+	info := sess.Info()
+	out := BrowserOpenOut{SessionID: sess.ID, Env: sess.EnvID, URL: in.URL, ChromeVersion: info.ChromeVersion}
 	_ = sess.Do(func(ctx context.Context) error {
 		out.URL, _ = browser.Location(ctx)
 		out.Title, _ = browser.Title(ctx)

@@ -59,9 +59,9 @@ manifest：
 
 | 方法 | 说明 |
 |---|---|
-| `ac.open({env, platform?, url?, proxy?, headless?})` | 打开环境并返回 `page` |
+| `ac.open({env, platform?, url?, proxy?, chromeVersion?, headless?})` | 打开环境并返回 `page` |
 | `ac.session(sessionId)` | 复用已有 MCP/CLI 会话 |
-| `ac.env.create({id, platform?})` | 创建环境目录，返回 `{dir, fingerprint}` |
+| `ac.env.create({id, platform?, chromeVersion?})` | 创建环境目录，返回 `{dir, fingerprint}` |
 | `ac.env.list()` | 列出当前用户的环境 |
 | `ac.log(...)` | 写日志 |
 | `ac.user` | 当前用户 id |

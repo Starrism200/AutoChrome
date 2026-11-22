@@ -79,7 +79,8 @@ export AUTOCHROME_USER=alice
   "vnc_port_start": 20000,
   "vnc_port_end": 20999,
   "env_root": "/data/autochrome/envs",
-  "attachment_root": "/data/autochrome/attachments"
+  "attachment_root": "/data/autochrome/attachments",
+  "chrome_version": "system"
 }
 ```
 
@@ -94,6 +95,7 @@ export AUTOCHROME_USER=alice
 | `vnc_port_start` / `vnc_port_end` | VNC/noVNC 自动分配端口范围，默认 10000–59999 |
 | `env_root` | 环境存储根目录，空则用默认 `profiles/` 或 `data/users/<id>/profiles/` |
 | `attachment_root` | 附件存储根目录，空则用默认目录 |
+| `chrome_version` | 用户默认 Chrome 版本，托管版本号或 `system` |
 
 ## 4. 隔离模型
 
@@ -119,7 +121,24 @@ L2 不能做到：
 需要更强隔离时，为每个用户使用独立的系统账号或容器，并分别启动
 `autochrome mcp -user <id>`。
 
-## 5. HTTP API 与用户隔离
+## 5. Chrome 版本与用户隔离
+
+Chrome 二进制是全局共享的（默认 `/opt/autochrome/chrome`），版本选择可以按
+用户或按环境覆盖：
+
+1. 会话请求里的 `chrome_version`
+2. 环境 `env.json` 的 `chrome_version`
+3. 用户 `user.json` 的 `chrome_version`
+4. 全局 `current`，最后是系统 Chrome
+
+```bash
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"version":"system"}' http://127.0.0.1:8787/api/v1/user/chrome
+```
+
+详见 [API.md](API.md) 的 Chrome 版本部分。
+
+## 6. HTTP API 与用户隔离
 
 `autochrome serve` 每个进程只服务一个用户，token 保存在
 `data/users/<id>/api_token`。多用户时启动多个端口：
@@ -131,7 +150,7 @@ L2 不能做到：
 
 详见 [API.md](API.md)。
 
-## 6. VNC 与用户隔离
+## 7. VNC 与用户隔离
 
 每个用户启动自己的 desktop：
 
@@ -146,7 +165,7 @@ L2 不能做到：
 - 只监听 127.0.0.1，远程访问建议 SSH 隧道
 - 详见 [VNC.md](VNC.md)
 
-## 7. 项目根目录
+## 8. 项目根目录
 
 MCP 客户端启动进程时的工作目录可能不是项目根目录。AutoChrome 按以下顺序
 确定根目录：
@@ -157,7 +176,7 @@ MCP 客户端启动进程时的工作目录可能不是项目根目录。AutoChr
 
 推荐在 MCP 配置中显式设置 `AUTOCHROME_HOME`。
 
-## 8. 迁移
+## 9. 迁移
 
 已有的 `profiles/`、`scripts/custom/`、`data/` 仍属于 `default` 用户，
 无需迁移。新用户从 `data/users/<id>/` 开始。

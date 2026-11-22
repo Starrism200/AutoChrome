@@ -17,6 +17,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"autochrome/internal/atomicfile"
+	"autochrome/internal/filelock"
 )
 
 // File is one stored attachment.
@@ -88,6 +91,11 @@ func (s *Store) Get(id string) (File, error) {
 func (s *Store) Save(name string, r io.Reader, max int64) (File, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(s.indexPath)
+	if err != nil {
+		return File{}, err
+	}
+	defer lock.Close()
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
 		return File{}, err
 	}
@@ -143,6 +151,11 @@ func (s *Store) Save(name string, r io.Reader, max int64) (File, error) {
 func (s *Store) Rename(id, name string) (File, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(s.indexPath)
+	if err != nil {
+		return File{}, err
+	}
+	defer lock.Close()
 	list, err := s.load()
 	if err != nil {
 		return File{}, err
@@ -168,6 +181,11 @@ func (s *Store) Rename(id, name string) (File, error) {
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(s.indexPath)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	list, err := s.load()
 	if err != nil {
 		return err
@@ -215,7 +233,7 @@ func (s *Store) save(list []File) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.indexPath, b, 0o600)
+	return atomicfile.Write(s.indexPath, b, 0o600)
 }
 
 var unsafe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)

@@ -14,19 +14,21 @@ import (
 	"strings"
 	"time"
 
+	"autochrome/internal/atomicfile"
 	"autochrome/internal/fingerprint"
 )
 
 const MetaFile = "env.json"
 
 type Meta struct {
-	ID          string              `json:"id"`
-	Platform    string              `json:"platform"`
-	Dir         string              `json:"dir"`
-	CreatedAt   string              `json:"created_at"`
-	ProxyID     string              `json:"proxy_id,omitempty"`
-	Proxy       string              `json:"proxy,omitempty"`
-	Fingerprint fingerprint.Profile `json:"fingerprint"`
+	ID            string              `json:"id"`
+	Platform      string              `json:"platform"`
+	Dir           string              `json:"dir"`
+	CreatedAt     string              `json:"created_at"`
+	ProxyID       string              `json:"proxy_id,omitempty"`
+	Proxy         string              `json:"proxy,omitempty"`
+	ChromeVersion string              `json:"chrome_version,omitempty"`
+	Fingerprint   fingerprint.Profile `json:"fingerprint"`
 }
 
 var unsafe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
@@ -43,15 +45,6 @@ func Sanitize(s string) string {
 		s = s[:80]
 	}
 	return s
-}
-
-// Root returns the active environment root. AUTOCHROME_ENV_ROOT wins, then the
-// supplied fallback (usually USER_DIR).
-func Root(fallback string) string {
-	if v := strings.TrimSpace(os.Getenv("AUTOCHROME_ENV_ROOT")); v != "" {
-		return v
-	}
-	return fallback
 }
 
 // Name returns the default directory name for an account.
@@ -99,19 +92,7 @@ func writeMeta(dir string, meta Meta) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, MetaFile), b, 0o600)
-}
-
-// Ensure makes sure an existing environment directory has metadata.
-func Ensure(dir string, meta Meta) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	p := filepath.Join(dir, MetaFile)
-	if _, err := os.Stat(p); err == nil {
-		return nil
-	}
-	return writeMeta(dir, meta)
+	return atomicfile.Write(filepath.Join(dir, MetaFile), b, 0o600)
 }
 
 // ReadMeta loads env.json if present.
@@ -163,16 +144,13 @@ func Find(root, id string) (Meta, string, bool) {
 	return Meta{}, "", false
 }
 
-// SetProxy binds a proxy id/url to an environment.
-func SetProxy(root, id, proxyID, proxyURL string) (Meta, error) {
-	meta, dir, ok := Find(root, id)
-	if !ok {
-		return Meta{}, fmt.Errorf("environment %q not found", id)
+// SetChromeDir writes a Chrome version binding to an explicit environment.
+func SetChromeDir(dir string, meta Meta, version string) (Meta, error) {
+	meta.ChromeVersion = version
+	if err := writeMeta(dir, meta); err != nil {
+		return Meta{}, err
 	}
-	if !withinRoot(root, dir) {
-		return Meta{}, fmt.Errorf("refusing to write %q outside %q", dir, root)
-	}
-	return SetProxyDir(dir, meta, proxyID, proxyURL)
+	return meta, nil
 }
 
 // SetProxyDir writes a proxy binding to an explicit environment directory.
@@ -192,25 +170,4 @@ func RemoveDir(dir string) error {
 		return fmt.Errorf("refusing to remove %q", dir)
 	}
 	return os.RemoveAll(clean)
-}
-
-// Delete removes an environment directory.
-func Delete(root, id string) error {
-	_, dir, ok := Find(root, id)
-	if !ok {
-		return fmt.Errorf("environment %q not found", id)
-	}
-	if !withinRoot(root, dir) {
-		return fmt.Errorf("refusing to delete %q outside %q", dir, root)
-	}
-	return os.RemoveAll(dir)
-}
-
-func withinRoot(root, dir string) bool {
-	cleanRoot := filepath.Clean(root)
-	cleanDir := filepath.Clean(dir)
-	if cleanDir == cleanRoot {
-		return false
-	}
-	return strings.HasPrefix(cleanDir+string(os.PathSeparator), cleanRoot+string(os.PathSeparator))
 }

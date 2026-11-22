@@ -1,0 +1,594 @@
+openapi: 3.0.3
+info:
+  title: AutoChrome API
+  version: 0.4.0
+  description: |
+    Per-user HTTP API for browser environments, sessions, proxies, attachments,
+    Chrome versions, VNC tokens and schedules. Most endpoints require a bearer
+    token. Interactive /i/ and /vnc/ routes use short-lived tokens instead.
+servers:
+  - url: http://127.0.0.1:8787/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        "200": { description: OK }
+  /user:
+    get:
+      summary: Current user and settings
+      responses:
+        "200": { description: User }
+  /storage:
+    get:
+      summary: Storage roots
+      responses:
+        "200": { description: Storage info }
+    put:
+      summary: Update storage roots
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                env_root: { type: string }
+                attachment_root: { type: string }
+      responses:
+        "200": { description: Updated storage info }
+  /envs:
+    get:
+      summary: List environments
+      responses:
+        "200": { description: Environments }
+    post:
+      summary: Create environment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+                platform: { type: string }
+                chrome_version: { type: string }
+      responses:
+        "201": { description: Created }
+        "409": { description: Environment already exists }
+  /envs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get environment
+      responses:
+        "200": { description: Environment }
+    delete:
+      summary: Delete environment (closes its sessions)
+      responses:
+        "200": { description: Deleted }
+  /envs/{id}/proxy:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      summary: Bind a proxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                proxy_id: { type: string }
+      responses:
+        "200": { description: Environment }
+    delete:
+      summary: Unbind proxy
+      responses:
+        "200": { description: Environment }
+  /envs/{id}/chrome:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      summary: Bind Chrome version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string }
+      responses:
+        "200": { description: Environment }
+    delete:
+      summary: Unbind Chrome version
+      responses:
+        "200": { description: Environment }
+  /envs/{id}/export:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Export environment as tar.gz
+      parameters:
+        - name: close
+          in: query
+          schema: { type: integer, enum: [0, 1] }
+      responses:
+        "200":
+          description: gzip archive
+          content:
+            application/gzip: {}
+  /envs/import:
+    post:
+      summary: Import environment archive
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: Imported }
+  /proxies:
+    get:
+      summary: List proxies
+      responses:
+        "200": { description: Proxies }
+    post:
+      summary: Add proxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                id: { type: string }
+                name: { type: string }
+                url: { type: string }
+                enabled: { type: boolean }
+                tags:
+                  type: array
+                  items: { type: string }
+      responses:
+        "201": { description: Created }
+  /proxies/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get proxy
+      responses:
+        "200": { description: Proxy }
+    patch:
+      summary: Update proxy
+      responses:
+        "200": { description: Proxy }
+    put:
+      summary: Update proxy
+      responses:
+        "200": { description: Proxy }
+    delete:
+      summary: Delete proxy
+      responses:
+        "200": { description: Deleted }
+  /proxies/{id}/check:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: TCP reachability check
+      responses:
+        "200": { description: Proxy with last_check fields }
+  /sessions:
+    get:
+      summary: List sessions
+      responses:
+        "200": { description: Sessions }
+    post:
+      summary: Open a session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [env]
+              properties:
+                env: { type: string }
+                platform: { type: string }
+                url: { type: string }
+                proxy: { type: string }
+                proxy_id: { type: string }
+                chrome_version: { type: string }
+                headless: { type: boolean }
+      responses:
+        "201": { description: Session }
+    delete:
+      summary: Close all sessions
+      responses:
+        "200": { description: Closed }
+  /sessions/batch:
+    post:
+      summary: Open multiple sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [envs]
+              properties:
+                envs:
+                  type: array
+                  items: { type: string }
+                url: { type: string }
+                proxy_id: { type: string }
+                chrome_version: { type: string }
+                headless: { type: boolean }
+      responses:
+        "200": { description: Per-environment results }
+  /sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Session info
+      responses:
+        "200": { description: Session }
+    delete:
+      summary: Close session
+      responses:
+        "200": { description: Closed }
+  /sessions/{id}/navigate:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Navigate
+      responses:
+        "200": { description: URL and title }
+  /sessions/{id}/reload:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Reload page
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/back:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Go back
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/snapshot:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Text snapshot with element refs
+      parameters:
+        - name: max
+          in: query
+          schema: { type: integer }
+      responses:
+        "200": { description: Snapshot }
+  /sessions/{id}/click:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Click by ref, selector or text
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/type:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Type text
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/press:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Press a key
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/wait:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Wait for selector, text, URL or cookie
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/eval:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Evaluate JavaScript
+      responses:
+        "200": { description: Result }
+  /sessions/{id}/screenshot:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Screenshot as PNG
+      parameters:
+        - name: full_page
+          in: query
+          schema: { type: integer, enum: [0, 1] }
+        - name: json
+          in: query
+          schema: { type: integer, enum: [0, 1] }
+        - name: name
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: PNG or JSON
+          content:
+            image/png: {}
+            application/json: {}
+  /sessions/{id}/cookies:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Read cookies
+      responses:
+        "200": { description: Cookies }
+    post:
+      summary: Write cookies
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/challenges:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Detect QR / OTP / CAPTCHA
+      responses:
+        "200": { description: Challenges }
+  /sessions/{id}/qr:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: QR code PNG
+      responses:
+        "200":
+          description: PNG
+          content:
+            image/png: {}
+  /sessions/{id}/click_xy:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Click at viewport coordinates
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/scroll:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Scroll page
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/auth:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Export cookies + user agent
+      responses:
+        "200": { description: Auth state }
+    post:
+      summary: Import cookies + user agent
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/auth/export:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Download auth state
+      responses:
+        "200": { description: Auth JSON }
+  /sessions/{id}/auth/import:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Import auth state from multipart file
+      responses:
+        "200": { description: OK }
+  /sessions/{id}/interaction:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Create a short-lived interaction page
+      responses:
+        "200": { description: Page URL and token }
+  /attachments:
+    get:
+      summary: List attachments
+      responses:
+        "200": { description: Attachments }
+    post:
+      summary: Upload attachment
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                name: { type: string }
+      responses:
+        "201": { description: Attachment }
+  /attachments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Attachment metadata
+      responses:
+        "200": { description: Attachment }
+    patch:
+      summary: Rename attachment
+      responses:
+        "200": { description: Attachment }
+    delete:
+      summary: Delete attachment
+      responses:
+        "200": { description: Deleted }
+  /attachments/{id}/download:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Download attachment
+      responses:
+        "200":
+          description: File
+          content:
+            application/octet-stream: {}
+  /scripts:
+    get:
+      summary: List scripts
+      responses:
+        "200": { description: Scripts }
+  /scripts/{name}:
+    parameters:
+      - $ref: "#/components/parameters/Name"
+    get:
+      summary: Get script
+      responses:
+        "200": { description: Script source }
+    put:
+      summary: Create or replace script
+      responses:
+        "200": { description: OK }
+    delete:
+      summary: Delete script
+      responses:
+        "200": { description: Deleted }
+  /scripts/{name}/run:
+    parameters:
+      - $ref: "#/components/parameters/Name"
+    post:
+      summary: Run script
+      responses:
+        "200": { description: Script result }
+  /chrome:
+    get:
+      summary: Current Chrome version
+      responses:
+        "200": { description: Version }
+  /chrome/versions:
+    get:
+      summary: List managed Chrome versions
+      responses:
+        "200": { description: Versions }
+  /chrome/update:
+    post:
+      summary: Download and install latest stable Chrome
+      responses:
+        "200": { description: Installed version }
+  /chrome/install:
+    post:
+      summary: Install Chrome from .deb or URL
+      responses:
+        "201": { description: Installed version }
+  /chrome/use:
+    put:
+      summary: Select managed Chrome version
+      responses:
+        "200": { description: Version }
+  /chrome/versions/{version}:
+    parameters:
+      - name: version
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      summary: Remove managed Chrome version
+      responses:
+        "200": { description: Deleted }
+  /user/chrome:
+    put:
+      summary: Set per-user Chrome version
+      responses:
+        "200": { description: User }
+    delete:
+      summary: Unset per-user Chrome version
+      responses:
+        "200": { description: User }
+  /desktop:
+    get:
+      summary: VNC desktop info
+      responses:
+        "200": { description: Desktop }
+  /desktop/token:
+    post:
+      summary: Create a short-lived public noVNC token (300s idle)
+      responses:
+        "200": { description: Token and URL }
+  /token/rotate:
+    post:
+      summary: Rotate API token
+      responses:
+        "200": { description: New token }
+  /events:
+    get:
+      summary: Server-sent events stream
+      responses:
+        "200":
+          description: text/event-stream
+          content:
+            text/event-stream: {}
+  /schedules:
+    get:
+      summary: List schedules
+      responses:
+        "200": { description: Schedules }
+    post:
+      summary: Create schedule
+      responses:
+        "201": { description: Schedule }
+  /schedules/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get schedule
+      responses:
+        "200": { description: Schedule }
+    patch:
+      summary: Update schedule
+      responses:
+        "200": { description: Schedule }
+    delete:
+      summary: Delete schedule
+      responses:
+        "200": { description: Deleted }
+  /schedules/{id}/run:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Run schedule once
+      responses:
+        "200": { description: Result }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Name:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }

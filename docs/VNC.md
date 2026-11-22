@@ -40,6 +40,31 @@ vnc: http://127.0.0.1:16001/vnc.html?autoconnect=1&resize=scale&reconnect=1 (dis
 --vnc-port-end 59999           # 覆盖用户配置的结束端口
 ```
 
+### 公网访问（API token）
+
+对外访问不要直接暴露 noVNC 端口，统一走 API：
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://your-server:8787/api/v1/desktop/token
+```
+
+返回：
+
+```json
+{
+  "token": "...",
+  "url": "https://your-server/vnc/<token>/vnc.html?autoconnect=1&resize=scale&reconnect=1",
+  "idle_timeout_seconds": 300
+}
+```
+
+- API 服务器代理 noVNC 页面、静态资源和 WebSocket
+- x11vnc/noVNC 仍只监听 `127.0.0.1`
+- token 默认 **300 秒无动作自动失效并断开**
+- 可用 `AUTOCHROME_VNC_IDLE_SECONDS` 调整空闲时间
+- 建议 API 放在 TLS 反向代理后面；`--addr 0.0.0.0:8787` 或反向代理到本机
+
 ## 3. 独立 desktop 服务
 
 如果希望 VNC 与 MCP 进程分开：
@@ -102,9 +127,10 @@ DISPLAY=:100 ./bin/autochrome mcp -user alice
 
 - x11vnc 使用 `-localhost`
 - websockify 绑定 `127.0.0.1`
+- 公网访问走 API 的 `/vnc/{token}/...`，token 300 秒空闲失效
 - 不使用密码时只允许本机访问
 
-远程访问建议：
+远程访问推荐 API token；也可以使用 SSH 隧道：
 
 ```bash
 ssh -L 16001:127.0.0.1:16001 user@host

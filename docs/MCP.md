@@ -54,7 +54,7 @@ opencode / Claude Desktop / Cursor 等通用写法：
 |---|---|
 | `env_create` | 创建环境目录和确定性指纹 |
 | `env_list` | 列出当前用户的环境 |
-| `browser_open` | 启动一个会话，返回 `session_id` |
+| `browser_open` | 启动一个会话，返回 `session_id`；支持 `chrome_version` |
 | `browser_close` | 关闭会话 |
 | `browser_list` | 列出存活会话 |
 | `browser_navigate` | 导航到 URL |
@@ -98,7 +98,8 @@ browser_close {session_id: "..."}
 ```
 
 `browser_open` 返回的 `session_id` 在后续调用中复用。会话会一直保持，直到
-`browser_close` 或 MCP 进程退出。
+`browser_close` 或 MCP 进程退出。`desktop_info` 返回本机 noVNC 地址；公网访问
+请使用 HTTP API 的 `POST /api/v1/desktop/token`。
 
 ## 5. 脚本工具
 

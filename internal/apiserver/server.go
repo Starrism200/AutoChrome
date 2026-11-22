@@ -25,13 +25,17 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 
+	"autochrome/internal/atomicfile"
 	"autochrome/internal/attachments"
 	"autochrome/internal/browser"
+	"autochrome/internal/chrome"
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
+	"autochrome/internal/filelock"
 	"autochrome/internal/fingerprint"
 	"autochrome/internal/jsruntime"
 	"autochrome/internal/proxy"
+	"autochrome/internal/scheduler"
 	"autochrome/internal/scripts"
 	"autochrome/internal/session"
 	"autochrome/internal/users"
@@ -43,9 +47,11 @@ const Version = "0.3.0"
 // Server is the HTTP API bound to one user.
 type Server struct {
 	User         users.User
-	Chrome       string
+	ChromePath   string
+	Chrome       *chrome.Manager
 	Addr         string
 	Token        string
+	tokenMu      sync.RWMutex
 	AllowOrigin  string
 	AllowEval    bool
 	AllowScripts bool
@@ -54,9 +60,15 @@ type Server struct {
 	Proxies      *proxy.Store
 	Registry     *envdir.Registry
 	Attachments  *attachments.Store
+	Schedules    *scheduler.Store
 
 	interMu      sync.Mutex
 	interactions map[string]*interaction
+
+	vncMu     sync.Mutex
+	vncTokens map[string]*vncToken
+
+	events *eventHub
 }
 
 type interaction struct {
@@ -65,27 +77,33 @@ type interaction struct {
 }
 
 // New returns a server for u.
-func New(u users.User, chrome string) *Server {
+func New(u users.User, chromePath string) *Server {
 	return &Server{
 		User:         u,
-		Chrome:       chrome,
+		ChromePath:   chromePath,
+		Chrome:       chrome.NewManager(),
 		Addr:         "127.0.0.1:8787",
 		AllowEval:    u.AllowEval,
 		AllowScripts: u.AllowScripts,
 		Proxies:      proxy.NewStore(filepath.Join(u.Home, "data", "users", u.ID, "proxies.json")),
 		Registry:     envdir.NewRegistry(u.RegistryPath()),
 		Attachments:  attachments.NewStore(u.AttachmentRoot, u.AttachmentIndexPath()),
+		Schedules:    scheduler.NewStore(filepath.Join(u.Home, "data", "users", u.ID, "schedules.json")),
 		interactions: map[string]*interaction{},
+		vncTokens:    map[string]*vncToken{},
+		events:       newEventHub(),
 	}
 }
 
 // Run starts the HTTP server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	s.Manager = session.NewManager(s.User, s.Chrome)
+	s.Manager = session.NewManager(s.User, s.ChromePath)
 	if s.Desktop != nil {
 		s.Manager.SetDisplay(s.Desktop.Display())
 	}
 	defer s.Manager.CloseAll()
+	go s.monitorVNCTokens(ctx)
+	go s.runScheduler(ctx)
 
 	mux := http.NewServeMux()
 	s.routes(mux)
@@ -115,9 +133,20 @@ func (s *Server) Run(ctx context.Context) error {
 
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	mux.HandleFunc("GET /api/v1/openapi.yaml", s.handleOpenAPI)
 	mux.HandleFunc("GET /api/v1/user", s.handleUser)
+	mux.HandleFunc("POST /api/v1/token/rotate", s.handleTokenRotate)
+	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	mux.HandleFunc("GET /api/v1/storage", s.handleStorageGet)
 	mux.HandleFunc("PUT /api/v1/storage", s.handleStoragePut)
+	mux.HandleFunc("PUT /api/v1/user/chrome", s.handleUserChrome)
+	mux.HandleFunc("DELETE /api/v1/user/chrome", s.handleUserChromeUnbind)
+	mux.HandleFunc("GET /api/v1/chrome", s.handleChrome)
+	mux.HandleFunc("GET /api/v1/chrome/versions", s.handleChromeVersions)
+	mux.HandleFunc("POST /api/v1/chrome/update", s.handleChromeUpdate)
+	mux.HandleFunc("POST /api/v1/chrome/install", s.handleChromeInstall)
+	mux.HandleFunc("PUT /api/v1/chrome/use", s.handleChromeUse)
+	mux.HandleFunc("DELETE /api/v1/chrome/versions/{version}", s.handleChromeDelete)
 
 	mux.HandleFunc("GET /api/v1/envs", s.handleEnvList)
 	mux.HandleFunc("POST /api/v1/envs", s.handleEnvCreate)
@@ -125,6 +154,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/envs/{id}", s.handleEnvDelete)
 	mux.HandleFunc("PUT /api/v1/envs/{id}/proxy", s.handleEnvBindProxy)
 	mux.HandleFunc("DELETE /api/v1/envs/{id}/proxy", s.handleEnvUnbindProxy)
+	mux.HandleFunc("PUT /api/v1/envs/{id}/chrome", s.handleEnvChrome)
+	mux.HandleFunc("DELETE /api/v1/envs/{id}/chrome", s.handleEnvChromeUnbind)
 	mux.HandleFunc("GET /api/v1/envs/{id}/export", s.handleEnvExport)
 	mux.HandleFunc("POST /api/v1/envs/import", s.handleEnvImport)
 
@@ -138,6 +169,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/sessions", s.handleSessionList)
 	mux.HandleFunc("POST /api/v1/sessions", s.handleSessionCreate)
+	mux.HandleFunc("POST /api/v1/sessions/batch", s.handleSessionBatch)
 	mux.HandleFunc("DELETE /api/v1/sessions", s.handleSessionCloseAll)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", s.handleSessionGet)
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.handleSessionDelete)
@@ -164,6 +196,13 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/auth/import", s.handleAuthImport)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/interaction", s.handleInteraction)
 
+	mux.HandleFunc("GET /api/v1/schedules", s.handleScheduleList)
+	mux.HandleFunc("POST /api/v1/schedules", s.handleScheduleAdd)
+	mux.HandleFunc("GET /api/v1/schedules/{id}", s.handleScheduleGet)
+	mux.HandleFunc("PATCH /api/v1/schedules/{id}", s.handleScheduleUpdate)
+	mux.HandleFunc("DELETE /api/v1/schedules/{id}", s.handleScheduleDelete)
+	mux.HandleFunc("POST /api/v1/schedules/{id}/run", s.handleScheduleRun)
+
 	mux.HandleFunc("GET /api/v1/scripts", s.handleScriptList)
 	mux.HandleFunc("GET /api/v1/scripts/{name}", s.handleScriptGet)
 	mux.HandleFunc("PUT /api/v1/scripts/{name}", s.handleScriptWrite)
@@ -178,6 +217,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/attachments/{id}", s.handleAttachmentDelete)
 
 	mux.HandleFunc("GET /api/v1/desktop", s.handleDesktop)
+	mux.HandleFunc("POST /api/v1/desktop/token", s.handleDesktopToken)
 
 	mux.HandleFunc("GET /i/{token}", s.handleInteractionPage)
 	mux.HandleFunc("GET /i/{token}/state", s.handleInteractionState)
@@ -186,16 +226,22 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /i/{token}/vnc", s.handleInteractionVNC)
 	mux.HandleFunc("POST /i/{token}/code", s.handleInteractionCode)
 	mux.HandleFunc("POST /i/{token}/click_xy", s.handleInteractionClickXY)
+
+	mux.HandleFunc("GET /vnc/{token}", s.handleVNC)
+	mux.HandleFunc("GET /vnc/{token}/{path...}", s.handleVNC)
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/health" || strings.HasPrefix(r.URL.Path, "/i/") {
+		if r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/openapi.yaml" || strings.HasPrefix(r.URL.Path, "/i/") || strings.HasPrefix(r.URL.Path, "/vnc/") {
 			next.ServeHTTP(w, r)
 			return
 		}
 		token := bearerToken(r)
-		if subtle.ConstantTimeCompare([]byte(token), []byte(s.Token)) != 1 {
+		s.tokenMu.RLock()
+		current := s.Token
+		s.tokenMu.RUnlock()
+		if subtle.ConstantTimeCompare([]byte(token), []byte(current)) != 1 {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing bearer token")
 			return
 		}
@@ -230,6 +276,24 @@ func bearerToken(r *http.Request) string {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": Version})
+}
+
+func (s *Server) handleTokenRotate(w http.ResponseWriter, _ *http.Request) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		writeError(w, http.StatusInternalServerError, "token_rotate_failed", err.Error())
+		return
+	}
+	token := "ac_" + hex.EncodeToString(buf)
+	if err := SaveToken(s.User, token); err != nil {
+		writeError(w, http.StatusInternalServerError, "token_rotate_failed", err.Error())
+		return
+	}
+	s.tokenMu.Lock()
+	s.Token = token
+	s.tokenMu.Unlock()
+	s.publish("token.rotated", map[string]any{})
+	writeJSON(w, http.StatusOK, map[string]any{"token": token})
 }
 
 func (s *Server) handleUser(w http.ResponseWriter, _ *http.Request) {
@@ -294,10 +358,15 @@ func (s *Server) findEnv(id string) (envdir.Meta, string, bool) {
 
 func (s *Server) handleEnvCreate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ID       string `json:"id"`
-		Platform string `json:"platform"`
+		ID            string `json:"id"`
+		Platform      string `json:"platform"`
+		ChromeVersion string `json:"chrome_version"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	if err := s.validateChrome(in.ChromeVersion); err != nil {
+		writeError(w, http.StatusBadRequest, "chrome_version_invalid", err.Error())
 		return
 	}
 	if in.ID == "" {
@@ -318,6 +387,11 @@ func (s *Server) handleEnvCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	meta, _ := envdir.ReadMeta(dir)
+	if in.ChromeVersion != "" {
+		if updated, err := envdir.SetChromeDir(dir, meta, in.ChromeVersion); err == nil {
+			meta = updated
+		}
+	}
 	_ = s.Registry.Put(meta)
 	writeJSON(w, http.StatusCreated, map[string]any{"dir": dir, "fingerprint": fp, "env": meta})
 }
@@ -330,12 +404,13 @@ func (s *Server) handleSessionList(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Env      string `json:"env"`
-		Platform string `json:"platform"`
-		URL      string `json:"url"`
-		Proxy    string `json:"proxy"`
-		ProxyID  string `json:"proxy_id"`
-		Headless bool   `json:"headless"`
+		Env           string `json:"env"`
+		Platform      string `json:"platform"`
+		URL           string `json:"url"`
+		Proxy         string `json:"proxy"`
+		ProxyID       string `json:"proxy_id"`
+		ChromeVersion string `json:"chrome_version"`
+		Headless      bool   `json:"headless"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -353,18 +428,66 @@ func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		proxyURL = p.URL
 	}
-	sess, err := s.Manager.Open(in.Env, in.Platform, in.URL, proxyURL, in.Headless)
+	sess, err := s.Manager.Open(in.Env, in.Platform, in.URL, proxyURL, in.Headless, in.ChromeVersion)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "open_failed", err.Error())
 		return
 	}
-	out := map[string]any{"session_id": sess.ID, "env": sess.EnvID, "proxy_id": in.ProxyID}
+	info := sess.Info()
+	out := map[string]any{"session_id": sess.ID, "env": sess.EnvID, "proxy_id": in.ProxyID, "chrome_version": info.ChromeVersion}
 	_ = sess.Do(func(ctx context.Context) error {
 		out["url"], _ = browser.Location(ctx)
 		out["title"], _ = browser.Title(ctx)
 		return nil
 	})
+	s.publish("session.opened", out)
 	writeJSON(w, http.StatusCreated, out)
+}
+
+func (s *Server) handleSessionBatch(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Envs          []string `json:"envs"`
+		URL           string   `json:"url"`
+		ProxyID       string   `json:"proxy_id"`
+		ChromeVersion string   `json:"chrome_version"`
+		Headless      bool     `json:"headless"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if len(in.Envs) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "envs is required")
+		return
+	}
+	proxyURL := ""
+	if in.ProxyID != "" {
+		p, err := s.Proxies.Get(in.ProxyID)
+		if err != nil || !p.Enabled {
+			writeError(w, http.StatusBadRequest, "proxy_unavailable", "proxy not found or disabled")
+			return
+		}
+		proxyURL = p.URL
+	}
+	results := make([]map[string]any, 0, len(in.Envs))
+	for _, env := range in.Envs {
+		result := map[string]any{"env": env}
+		sess, err := s.Manager.Open(env, "", in.URL, proxyURL, in.Headless, in.ChromeVersion)
+		if err != nil {
+			result["error"] = err.Error()
+			results = append(results, result)
+			continue
+		}
+		result["session_id"] = sess.ID
+		result["chrome_version"] = sess.Info().ChromeVersion
+		_ = sess.Do(func(ctx context.Context) error {
+			result["url"], _ = browser.Location(ctx)
+			result["title"], _ = browser.Title(ctx)
+			return nil
+		})
+		results = append(results, result)
+		s.publish("session.opened", result)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
@@ -377,14 +500,17 @@ func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSessionCloseAll(w http.ResponseWriter, _ *http.Request) {
 	s.Manager.CloseAll()
+	s.publish("sessions.closed", map[string]any{"all": true})
 	writeJSON(w, http.StatusOK, map[string]any{"closed": true})
 }
 
 func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.Manager.Close(r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+	if err := s.Manager.Close(id); err != nil {
 		writeError(w, http.StatusNotFound, "session_not_found", err.Error())
 		return
 	}
+	s.publish("session.closed", map[string]any{"session_id": id})
 	writeJSON(w, http.StatusOK, map[string]any{"closed": true})
 }
 
@@ -890,6 +1016,7 @@ func (s *Server) handleProxyAdd(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "proxy_add_failed", err.Error())
 		return
 	}
+	s.publish("proxy.created", p)
 	writeJSON(w, http.StatusCreated, p)
 }
 
@@ -931,14 +1058,17 @@ func (s *Server) handleProxyUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "proxy_update_failed", err.Error())
 		return
 	}
+	s.publish("proxy.updated", p)
 	writeJSON(w, http.StatusOK, p)
 }
 
 func (s *Server) handleProxyDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.Proxies.Delete(r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+	if err := s.Proxies.Delete(id); err != nil {
 		writeError(w, http.StatusNotFound, "proxy_not_found", err.Error())
 		return
 	}
+	s.publish("proxy.deleted", map[string]any{"id": id})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -979,6 +1109,7 @@ func (s *Server) handleEnvDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.Registry.Delete(meta.ID)
+	s.publish("env.deleted", meta)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -1096,14 +1227,18 @@ func (s *Server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
 		scheme = proto
 	}
-	host := r.Host
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
 	if host == "" {
 		host = s.Addr
 	}
 	base := scheme + "://" + host + "/i/" + token
 	vncURL := ""
 	if s.Desktop != nil {
-		vncURL = s.Desktop.Info().URL
+		vt := s.newVNCToken(s.Desktop.Info().WebPort)
+		vncURL = scheme + "://" + host + "/vnc/" + vt + "/vnc.html?autoconnect=1&resize=scale&reconnect=1"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id":     sess.ID,
@@ -1247,7 +1382,8 @@ func (s *Server) handleInteractionVNC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "vnc_disabled", "VNC is not enabled")
 		return
 	}
-	http.Redirect(w, r, s.Desktop.Info().URL, http.StatusFound)
+	token := s.newVNCToken(s.Desktop.Info().WebPort)
+	http.Redirect(w, r, "/vnc/"+token+"/vnc.html?autoconnect=1&resize=scale&reconnect=1", http.StatusFound)
 }
 
 func (s *Server) handleInteractionCode(w http.ResponseWriter, r *http.Request) {
@@ -1349,6 +1485,7 @@ func (s *Server) handleStoragePut(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Manager.SetUser(s.User)
 	s.Attachments.SetRoot(s.User.AttachmentRoot)
+	s.publish("storage.updated", s.storageInfo())
 	writeJSON(w, http.StatusOK, s.storageInfo())
 }
 
@@ -1440,6 +1577,7 @@ func (s *Server) handleAttachmentAdd(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "attachment_save_failed", err.Error())
 		return
 	}
+	s.publish("attachment.created", saved)
 	writeJSON(w, http.StatusCreated, saved)
 }
 
@@ -1482,10 +1620,12 @@ func (s *Server) handleAttachmentDownload(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleAttachmentDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.Attachments.Delete(r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+	if err := s.Attachments.Delete(id); err != nil {
 		writeError(w, http.StatusNotFound, "attachment_not_found", err.Error())
 		return
 	}
+	s.publish("attachment.deleted", map[string]any{"id": id})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -1705,8 +1845,24 @@ func TokenPath(u users.User) string {
 }
 
 // LoadOrCreateToken returns the persisted token, creating it on first use.
+// SaveToken writes a new token for the user.
+func SaveToken(u users.User, token string) error {
+	path := TokenPath(u)
+	lock, err := filelock.Acquire(path)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	return atomicfile.Write(path, []byte(token+"\n"), 0o600)
+}
+
 func LoadOrCreateToken(u users.User) (string, error) {
 	path := TokenPath(u)
+	lock, err := filelock.Acquire(path)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Close()
 	if b, err := os.ReadFile(path); err == nil {
 		if token := strings.TrimSpace(string(b)); token != "" {
 			return token, nil
@@ -1717,10 +1873,7 @@ func LoadOrCreateToken(u users.User) (string, error) {
 		return "", err
 	}
 	token := "ac_" + hex.EncodeToString(buf)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+	if err := atomicfile.Write(path, []byte(token+"\n"), 0o600); err != nil {
 		return "", err
 	}
 	return token, nil

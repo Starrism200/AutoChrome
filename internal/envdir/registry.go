@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"autochrome/internal/atomicfile"
+	"autochrome/internal/filelock"
 )
 
 // Registry is a per-user index of environment directories. It makes
@@ -45,6 +48,11 @@ func (r *Registry) Get(id string) (Meta, bool) {
 func (r *Registry) Put(meta Meta) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	lock, err := filelock.Acquire(r.path)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	list, err := r.load()
 	if err != nil {
 		return err
@@ -67,6 +75,11 @@ func (r *Registry) Put(meta Meta) error {
 func (r *Registry) Delete(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	lock, err := filelock.Acquire(r.path)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	list, err := r.load()
 	if err != nil {
 		return err
@@ -103,5 +116,5 @@ func (r *Registry) save(list []Meta) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.path, b, 0o600)
+	return atomicfile.Write(r.path, b, 0o600)
 }

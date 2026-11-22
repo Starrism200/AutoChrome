@@ -21,12 +21,22 @@
 - 代理管理、按实例绑定代理、代理连通性检测
 - 可配置环境/附件存储路径，通用附件上传下载
 - 环境打包导出/导入（`.tar.gz`）
+- Chrome 多版本管理（安装/切换/更新/删除）
+- API 代理 noVNC 公网 token，300 秒无动作断开
+- SSE 事件流、批量打开会话、token 轮换、定时任务
+- OpenAPI 文档：`/api/v1/openapi.yaml`
 - Cookie + User-Agent 导入导出
 - 短期交互页面，用于扫码 / 验证码 / 打码人工接管
 - VNC/noVNC 远程桌面，支持真人接管（扫码、短信验证码、打码）
 - 二维码/OTP/验证码检测、二维码截图与坐标点击
 - 多用户隔离（L2：每用户一个 MCP 进程和独立目录树）
 - CDP 能力：带元素引用的快照、截图、Cookie、真实键盘事件
+
+## 架构
+
+Chrome 二进制是共享的（系统 Chrome 或托管版本）；每个环境有独立的持久化
+profile，每个存活会话是一个独立的 Chrome 进程。用户层面是 L2 隔离：
+独立进程 + 独立目录，不是 OS 用户或容器隔离。
 
 ## 依赖
 
@@ -36,6 +46,7 @@
 - `xvfb`
 - `fonts-liberation`
 - `x11vnc`、`novnc`、`websockify`（VNC 需要，`install.sh` 会安装）
+- `dpkg-deb`（安装托管 Chrome `.deb` 包）
 
 ## 安装
 
@@ -160,7 +171,8 @@ return { title, nodes: snap.nodes.length };
 环境、会话、导航、快照、截图、验证码检测、脚本、代理和 VNC 信息。还支持代理
 增删改查/检测、按环境绑定代理，以及 `GET /api/v1/sessions/{id}/interaction`
 生成的短期交互页面；以及存储路径、附件上传下载、环境打包导入导出、
-Cookie+UA 导入导出。
+Cookie+UA 导入导出、Chrome 多版本管理、SSE 事件流、批量打开、token 轮换、
+间隔定时任务和短期交互页面。OpenAPI：`GET /api/v1/openapi.yaml`。
 
 ```bash
 TOKEN=$(cat data/users/alice/api_token)
@@ -176,9 +188,9 @@ curl -H "Authorization: Bearer $TOKEN" \
 ./bin/autochrome mcp -user alice --vnc
 ```
 
-服务会在 stderr 打印 noVNC 地址，并通过 `desktop_info` 工具和
-`autochrome://desktop` 资源暴露。真人打开地址即可扫码、输验证码或打码，
-AI 用 `browser_wait` 等待完成。
+公网访问调用 `POST /api/v1/desktop/token` 获取短期 `/vnc/<token>/...` 地址，
+由 API 代理 noVNC；默认 300 秒无动作自动断开。本机 noVNC 地址仍会打印在
+stderr，并通过 `desktop_info` / `autochrome://desktop` 暴露。
 
 端口从用户配置的范围自动分配，默认 `10000-59999`：
 
@@ -200,7 +212,6 @@ DISPLAY=:100 ./bin/autochrome mcp -user alice
 ```text
 cmd/autochrome/        命令行入口：gen / open / user / script / mcp
 internal/browser/      Chrome 启动、CDP 操作、快照、截图
-internal/browserexec/  在 DISPLAY 或 xvfb-run 下启动子进程
 internal/browserslot/  跨进程浏览器并发槽位
 internal/envdir/       环境目录、索引与打包
 internal/attachments/  通用附件存储
@@ -211,6 +222,10 @@ internal/jsruntime/    嵌入式 JavaScript SDK（goja）
 internal/scripts/      脚本发现与 manifest
 internal/mcpserver/    MCP stdio 服务器
 internal/apiserver/    HTTP/JSON API 服务器
+internal/chrome/       Chrome 多版本管理
+internal/scheduler/    间隔定时任务
+internal/filelock/     跨进程索引锁
+internal/atomicfile/   原子文件写入
 internal/xvfb/         共享虚拟显示器
 internal/desktop/      VNC/noVNC 远程桌面服务
 internal/ua/           UA 常量

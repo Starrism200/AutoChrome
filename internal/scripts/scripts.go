@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"autochrome/internal/atomicfile"
 )
 
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -133,7 +135,7 @@ func Write(root, name, source string, manifest map[string]any) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(root, name+".js"), []byte(source), 0o600); err != nil {
+	if err := atomicfile.Write(filepath.Join(root, name+".js"), []byte(source), 0o600); err != nil {
 		return err
 	}
 	manifestPath := filepath.Join(root, name+".json")
@@ -145,7 +147,7 @@ func Write(root, name, source string, manifest map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(manifestPath, b, 0o600)
+	return atomicfile.Write(manifestPath, b, 0o600)
 }
 
 // Delete removes a script and its manifest.

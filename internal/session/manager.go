@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"autochrome/internal/browser"
+	chromepkg "autochrome/internal/chrome"
 	"autochrome/internal/envdir"
 	"autochrome/internal/fingerprint"
 	"autochrome/internal/users"
@@ -22,24 +23,26 @@ import (
 
 // Info is a serializable session summary.
 type Info struct {
-	ID        string `json:"id"`
-	EnvID     string `json:"env_id"`
-	Platform  string `json:"platform"`
-	URL       string `json:"url,omitempty"`
-	Proxy     string `json:"proxy,omitempty"`
-	Headless  bool   `json:"headless"`
-	CreatedAt string `json:"created_at"`
+	ID            string `json:"id"`
+	EnvID         string `json:"env_id"`
+	Platform      string `json:"platform"`
+	URL           string `json:"url,omitempty"`
+	Proxy         string `json:"proxy,omitempty"`
+	ChromeVersion string `json:"chrome_version,omitempty"`
+	Headless      bool   `json:"headless"`
+	CreatedAt     string `json:"created_at"`
 }
 
 // Session is one live Chrome process.
 type Session struct {
-	ID         string
-	EnvID      string
-	Platform   string
-	ProfileDir string
-	Proxy      string
-	Headless   bool
-	CreatedAt  time.Time
+	ID            string
+	EnvID         string
+	Platform      string
+	ProfileDir    string
+	Proxy         string
+	ChromeVersion string
+	Headless      bool
+	CreatedAt     time.Time
 
 	manager *Manager
 	ctx     context.Context
@@ -51,9 +54,10 @@ type Session struct {
 
 // Manager creates, stores and closes sessions for one user.
 type Manager struct {
-	user     users.User
-	chrome   string
-	registry *envdir.Registry
+	user       users.User
+	chromePath string
+	chromeMgr  *chromepkg.Manager
+	registry   *envdir.Registry
 
 	mu              sync.Mutex
 	sessions        map[string]*Session
@@ -68,11 +72,12 @@ func NewManager(user users.User, chrome string) *Manager {
 		chrome = "/usr/bin/google-chrome"
 	}
 	return &Manager{
-		user:     user,
-		chrome:   chrome,
-		registry: envdir.NewRegistry(user.RegistryPath()),
-		sessions: map[string]*Session{},
-		opening:  map[string]bool{},
+		user:       user,
+		chromePath: chrome,
+		chromeMgr:  chromepkg.NewManager(),
+		registry:   envdir.NewRegistry(user.RegistryPath()),
+		sessions:   map[string]*Session{},
+		opening:    map[string]bool{},
 	}
 }
 
@@ -123,7 +128,7 @@ func (m *Manager) Display() (*xvfb.Display, error) {
 }
 
 // Open launches a browser for envID and returns a stored session.
-func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Session, error) {
+func (m *Manager) Open(envID, platform, url, proxy string, headless bool, chromeVersion string) (*Session, error) {
 	if envID == "" {
 		return nil, fmt.Errorf("env id is required")
 	}
@@ -179,6 +184,7 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Sess
 		}
 		if hasMeta {
 			created.ProxyID, created.Proxy = meta.ProxyID, meta.Proxy
+			created.ChromeVersion = meta.ChromeVersion
 			_, _ = envdir.SetProxyDir(dir, created, created.ProxyID, created.Proxy)
 		}
 		meta, hasMeta = created, true
@@ -194,6 +200,23 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Sess
 	if proxy == "" {
 		proxy = user.DefaultProxy
 	}
+	version := chromeVersion
+	if version == "" {
+		version = meta.ChromeVersion
+	}
+	if version == "" {
+		version = user.ChromeVersion
+	}
+	chromePath, err := m.chromeMgr.Resolve(version, m.chromePath)
+	if err != nil {
+		return nil, err
+	}
+	displayVersion := version
+	if displayVersion == "" {
+		if cur, err := m.chromeMgr.Current(); err == nil {
+			displayVersion = cur.Version
+		}
+	}
 
 	var env []string
 	if !headless {
@@ -205,7 +228,7 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Sess
 	}
 
 	ctx, cleanup, err := browser.Launch(browser.Options{
-		ChromePath:  m.chrome,
+		ChromePath:  chromePath,
 		ProfileDir:  dir,
 		ProxyAddr:   proxy,
 		Headless:    headless,
@@ -220,16 +243,17 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Sess
 	}
 
 	s := &Session{
-		ID:         newID(),
-		EnvID:      envID,
-		Platform:   platform,
-		ProfileDir: dir,
-		Proxy:      proxy,
-		Headless:   headless,
-		CreatedAt:  time.Now(),
-		manager:    m,
-		ctx:        ctx,
-		cleanup:    cleanup,
+		ID:            newID(),
+		EnvID:         envID,
+		Platform:      platform,
+		ProfileDir:    dir,
+		Proxy:         proxy,
+		ChromeVersion: displayVersion,
+		Headless:      headless,
+		CreatedAt:     time.Now(),
+		manager:       m,
+		ctx:           ctx,
+		cleanup:       cleanup,
 	}
 
 	m.mu.Lock()
@@ -294,6 +318,18 @@ func (m *Manager) CloseAll() {
 	m.mu.Unlock()
 }
 
+// SessionForEnv returns the live session for envID, if any.
+func (m *Manager) SessionForEnv(envID string) (*Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		if s.EnvID == envID {
+			return s, true
+		}
+	}
+	return nil, false
+}
+
 // CloseEnv closes every session opened for envID.
 func (m *Manager) CloseEnv(envID string) {
 	m.mu.Lock()
@@ -339,13 +375,14 @@ func (s *Session) Info() Info {
 	url := s.lastURL
 	s.mu.Unlock()
 	return Info{
-		ID:        s.ID,
-		EnvID:     s.EnvID,
-		Platform:  s.Platform,
-		URL:       url,
-		Proxy:     s.Proxy,
-		Headless:  s.Headless,
-		CreatedAt: s.CreatedAt.Format(time.RFC3339),
+		ID:            s.ID,
+		EnvID:         s.EnvID,
+		Platform:      s.Platform,
+		URL:           url,
+		Proxy:         s.Proxy,
+		ChromeVersion: s.ChromeVersion,
+		Headless:      s.Headless,
+		CreatedAt:     s.CreatedAt.Format(time.RFC3339),
 	}
 }
 

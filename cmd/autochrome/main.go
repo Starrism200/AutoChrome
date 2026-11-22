@@ -21,6 +21,7 @@ import (
 
 	"autochrome/internal/apiserver"
 	"autochrome/internal/browser"
+	chromepkg "autochrome/internal/chrome"
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
 	"autochrome/internal/fingerprint"
@@ -90,6 +91,7 @@ func cmdGen(args []string) {
 	root := fs.String("root", "", "environment root (default: the user's profiles dir)")
 	id := fs.String("id", "", "environment id (required)")
 	platform := fs.String("platform", "default", "platform name used in the directory name")
+	chromeVersion := fs.String("chrome-version", "", "managed Chrome version")
 	_ = fs.Parse(args)
 
 	if *id == "" {
@@ -115,12 +117,20 @@ func cmdGen(args []string) {
 	if _, _, ok := envdir.Find(envRoot, *id); ok {
 		log.Fatalf("environment %q already exists", *id)
 	}
+	if *chromeVersion != "" && *chromeVersion != "system" && *chromeVersion != "default" {
+		if _, err := chromepkg.NewManager().Get(*chromeVersion); err != nil {
+			log.Fatalf("chrome version: %v", err)
+		}
+	}
 	fp := fingerprint.Generate(*id)
 	dir, err := envdir.Create(envRoot, *platform, *id, fp)
 	if err != nil {
 		log.Fatalf("create environment: %v", err)
 	}
 	if meta, ok := envdir.ReadMeta(dir); ok {
+		if *chromeVersion != "" {
+			meta, _ = envdir.SetChromeDir(dir, meta, *chromeVersion)
+		}
 		_ = reg.Put(meta)
 	}
 	fmt.Printf("user=%s\n", u.ID)
@@ -146,6 +156,7 @@ func cmdOpen(args []string) {
 	id := fs.String("id", "", "environment id (required)")
 	platform := fs.String("platform", "default", "platform name used in the directory name")
 	chrome := fs.String("chrome", "/usr/bin/google-chrome", "Chrome executable")
+	chromeVersion := fs.String("chrome-version", "", "managed Chrome version")
 	proxy := fs.String("proxy", "", "proxy address, e.g. socks5://127.0.0.1:10801")
 	url := fs.String("url", "https://example.com", "page to open")
 	headless := fs.Bool("headless", false, "run Chrome headless instead of on the virtual display")
@@ -241,6 +252,7 @@ func cmdOpen(args []string) {
 		}
 		if hasMeta {
 			created.ProxyID, created.Proxy = meta.ProxyID, meta.Proxy
+			created.ChromeVersion = meta.ChromeVersion
 			_, _ = envdir.SetProxyDir(dir, created, created.ProxyID, created.Proxy)
 		}
 		meta, hasMeta = created, true
@@ -250,6 +262,17 @@ func cmdOpen(args []string) {
 		meta.Platform = *platform
 	}
 	_ = registry.Put(meta)
+	version := *chromeVersion
+	if version == "" {
+		version = meta.ChromeVersion
+	}
+	if version == "" {
+		version = u.ChromeVersion
+	}
+	chromePath, err := chromepkg.NewManager().Resolve(version, *chrome)
+	if err != nil {
+		log.Fatalf("chrome version: %v", err)
+	}
 
 	proxyAddr := *proxy
 	if proxyAddr == "" && hasMeta {
@@ -260,7 +283,7 @@ func cmdOpen(args []string) {
 	}
 
 	ctx, cleanup, err := browser.Launch(browser.Options{
-		ChromePath:  *chrome,
+		ChromePath:  chromePath,
 		ProfileDir:  dir,
 		ProxyAddr:   proxyAddr,
 		Headless:    *headless,

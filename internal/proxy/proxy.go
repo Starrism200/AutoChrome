@@ -14,6 +14,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"autochrome/internal/atomicfile"
+	"autochrome/internal/filelock"
 )
 
 // Proxy is one configured proxy.
@@ -71,6 +74,11 @@ func (s *Store) Add(p Proxy) (Proxy, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(s.path)
+	if err != nil {
+		return Proxy{}, err
+	}
+	defer lock.Close()
 	list, err := s.load()
 	if err != nil {
 		return Proxy{}, err
@@ -98,6 +106,11 @@ func (s *Store) Add(p Proxy) (Proxy, error) {
 func (s *Store) Update(id string, fn func(*Proxy) error) (Proxy, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(s.path)
+	if err != nil {
+		return Proxy{}, err
+	}
+	defer lock.Close()
 	list, err := s.load()
 	if err != nil {
 		return Proxy{}, err
@@ -125,6 +138,11 @@ func (s *Store) Update(id string, fn func(*Proxy) error) (Proxy, error) {
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(s.path)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	list, err := s.load()
 	if err != nil {
 		return err
@@ -148,6 +166,11 @@ func (s *Store) Delete(id string) error {
 func (s *Store) Check(id string) (Proxy, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(s.path)
+	if err != nil {
+		return Proxy{}, err
+	}
+	defer lock.Close()
 	list, err := s.load()
 	if err != nil {
 		return Proxy{}, err
@@ -204,7 +227,7 @@ func (s *Store) save(list []Proxy) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, b, 0o600)
+	return atomicfile.Write(s.path, b, 0o600)
 }
 
 // ValidateURL checks the supported proxy formats.

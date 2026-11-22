@@ -14,6 +14,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"autochrome/internal/atomicfile"
+	"autochrome/internal/filelock"
 )
 
 const DefaultID = "default"
@@ -39,6 +42,7 @@ type User struct {
 	VNCPortEnd         int      `json:"vnc_port_end,omitempty"`
 	EnvRootPath        string   `json:"env_root,omitempty"`
 	AttachmentRootPath string   `json:"attachment_root,omitempty"`
+	ChromeVersion      string   `json:"chrome_version,omitempty"`
 
 	Home           string `json:"-"`
 	Root           string `json:"-"`
@@ -196,14 +200,16 @@ func (u User) Save() error {
 		return err
 	}
 	path := u.settingsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	lock, err := filelock.Acquire(path)
+	if err != nil {
 		return err
 	}
+	defer lock.Close()
 	b, err := json.MarshalIndent(u, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	return atomicfile.Write(path, b, 0o600)
 }
 
 // EnsureDirs creates every directory owned by the user.
@@ -338,6 +344,7 @@ func (u *User) load(path string) error {
 	u.DefaultProxy = stored.DefaultProxy
 	u.EnvRootPath = stored.EnvRootPath
 	u.AttachmentRootPath = stored.AttachmentRootPath
+	u.ChromeVersion = stored.ChromeVersion
 	u.applyPaths()
 	if stored.VNCPortStart > 0 {
 		u.VNCPortStart = stored.VNCPortStart

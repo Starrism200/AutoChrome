@@ -17,7 +17,6 @@ cmd/autochrome
 - `internal/envdir`：每个环境一个自包含目录，写入 `env.json`
 - `internal/fingerprint`：用环境 id 作为种子，确定性生成身份
 - `internal/browser`：组装 Chrome 启动参数、CDP 操作与页面辅助函数
-- `internal/browserexec`：在 `DISPLAY` 存在时直接运行，否则用 `xvfb-run`
 - `internal/browserslot`：用 `flock` 跨进程限制同时运行的浏览器数量
 
 ## 2. 虚拟显示器（Xvfb）
@@ -30,16 +29,6 @@ cmd/autochrome
 
 这样做的原因：纯 `--headless` 的浏览器特征与真实有头浏览器不同，部分站点更
 容易识别自动化。在 Xvfb 中运行**有头** Chrome 可以兼顾无物理屏幕和真实性。
-
-`internal/browserexec.Command` 用于启动外部子进程（例如多个浏览器共享同一个
-Xvfb）：
-
-```go
-cmd := browserexec.Command("xvfb-run", "/usr/bin/google-chrome", "--version")
-```
-
-- `DISPLAY` 已设置：直接 `exec.Command(bin, args...)`
-- 未设置：`xvfb-run -a -s "-screen 0 1366x900x24" bin args...`
 
 ## 3. 环境目录
 

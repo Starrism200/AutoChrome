@@ -23,6 +23,7 @@ build
 | `novnc` / `websockify` | 浏览器版 VNC 客户端 | apt |
 | `fonts-liberation` | 基础字体，避免页面渲染异常 | apt |
 | `ca-certificates` / `curl` | 下载 Chrome | apt |
+| `dpkg-deb` | 安装托管 Chrome `.deb` 版本 | apt / dpkg |
 | Go 1.26+ | 编译 | 手动安装或用 `GO_BIN` 指定 |
 
 ## 3. 首次安装
@@ -70,7 +71,27 @@ sudo ./update.sh
 SKIP_SYSTEM=1 ./update.sh
 ```
 
-## 5. 验证安装
+## 5. Chrome 多版本
+
+托管版本默认放在 `/opt/autochrome/chrome`，可用 `AUTOCHROME_CHROME_DIR` 覆盖。
+
+```bash
+TOKEN=$(cat data/users/default/api_token)
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8787/api/v1/chrome/update
+```
+
+也可以上传本地 `.deb`：
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -F 'file=@google-chrome-stable_current_amd64.deb' \
+  http://127.0.0.1:8787/api/v1/chrome/install
+```
+
+旧版本需要自行准备对应的 `.deb` 再通过 `/api/v1/chrome/install` 安装。
+
+## 6. 验证安装
 
 ```bash
 google-chrome --version
@@ -81,7 +102,7 @@ xvfb-run -a google-chrome --version
 
 若 `open` 能生成截图，说明浏览器与虚拟显示器都正常。
 
-## 6. 常见问题
+## 7. 常见问题
 
 ### `xvfb-run: command not found`
 
