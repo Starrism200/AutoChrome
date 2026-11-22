@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -319,6 +320,28 @@ func (m *Manager) CloseAll() {
 		m.display = nil
 	}
 	m.mu.Unlock()
+}
+
+// Restart closes a session and opens a fresh browser for the same environment.
+func (m *Manager) Restart(id, url string) (*Session, error) {
+	sess, err := m.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	info := sess.Info()
+	if strings.TrimSpace(url) == "" {
+		url = info.URL
+	}
+	_ = m.Close(id)
+	return m.Open(info.EnvID, info.Platform, url, info.Proxy, info.Headless, info.ChromeVersion)
+}
+
+// RestartEnv restarts the live session for envID, or opens one if none exists.
+func (m *Manager) RestartEnv(envID, url string) (*Session, error) {
+	if sess, ok := m.SessionForEnv(envID); ok {
+		return m.Restart(sess.ID, url)
+	}
+	return m.Open(envID, "", url, "", false, "")
 }
 
 // SessionForEnv returns the live session for envID, if any.

@@ -27,6 +27,8 @@
 - SSE 事件流、批量打开会话、token 轮换、定时任务
 - 远程 MCP（Streamable HTTP，`serve --mcp`）
 - 异步脚本任务，带持久化日志和取消
+- 不需要重启服务即可重新拉起会话/容器
+- 容器级 Chrome 视口大小（noVNC 画布仍是每用户 Xvfb）
 - OpenAPI 文档：`/api/v1/openapi.yaml`
 - Cookie + User-Agent 导入导出
 - 短期交互页面，用于扫码 / 验证码 / 打码人工接管

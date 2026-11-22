@@ -396,3 +396,31 @@ func TestAsyncScriptJobs(t *testing.T) {
 		t.Fatalf("logs = %d %s", resp.StatusCode, data)
 	}
 }
+
+func TestContainerSize(t *testing.T) {
+	_, ts := newTestAPI(t)
+	resp, _ := request(t, ts, http.MethodPost, "/api/v1/containers", "test-token", map[string]any{"id": "sized"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d", resp.StatusCode)
+	}
+	resp, data := request(t, ts, http.MethodPut, "/api/v1/containers/sized/size", "test-token", map[string]any{
+		"width": 1920, "height": 1080, "restart": false,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("size = %d %s", resp.StatusCode, data)
+	}
+	var out struct {
+		Env struct {
+			Fingerprint struct {
+				Width  int `json:"width"`
+				Height int `json:"height"`
+			} `json:"fingerprint"`
+		} `json:"env"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Env.Fingerprint.Width != 1920 || out.Env.Fingerprint.Height != 1080 {
+		t.Fatalf("size = %+v", out)
+	}
+}

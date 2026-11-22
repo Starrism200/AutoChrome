@@ -183,6 +183,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/envs/{id}", s.handleEnvDelete)
 	mux.HandleFunc("PUT /api/v1/envs/{id}/proxy", s.handleEnvBindProxy)
 	mux.HandleFunc("DELETE /api/v1/envs/{id}/proxy", s.handleEnvUnbindProxy)
+	mux.HandleFunc("PUT /api/v1/envs/{id}/size", s.handleEnvSize)
+	mux.HandleFunc("POST /api/v1/envs/{id}/restart", s.handleEnvRestart)
 	mux.HandleFunc("PUT /api/v1/envs/{id}/chrome", s.handleEnvChrome)
 	mux.HandleFunc("DELETE /api/v1/envs/{id}/chrome", s.handleEnvChromeUnbind)
 	mux.HandleFunc("GET /api/v1/envs/{id}/export", s.handleEnvExport)
@@ -198,6 +200,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/containers/{name}/export", s.containerAlias(s.handleEnvExport))
 	mux.HandleFunc("PUT /api/v1/containers/{name}/proxy", s.containerAlias(s.handleEnvBindProxy))
 	mux.HandleFunc("DELETE /api/v1/containers/{name}/proxy", s.containerAlias(s.handleEnvUnbindProxy))
+	mux.HandleFunc("PUT /api/v1/containers/{name}/size", s.containerAlias(s.handleEnvSize))
+	mux.HandleFunc("POST /api/v1/containers/{name}/restart", s.containerAlias(s.handleEnvRestart))
 	mux.HandleFunc("PUT /api/v1/containers/{name}/chrome", s.containerAlias(s.handleEnvChrome))
 	mux.HandleFunc("DELETE /api/v1/containers/{name}/chrome", s.containerAlias(s.handleEnvChromeUnbind))
 
@@ -216,6 +220,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/{id}", s.handleSessionGet)
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.handleSessionDelete)
 
+	mux.HandleFunc("POST /api/v1/sessions/{id}/restart", s.handleSessionRestart)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/navigate", s.handleNavigate)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/reload", s.handleReload)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/back", s.handleBack)
@@ -1640,6 +1645,94 @@ func (s *Server) handleStoragePut(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publish("storage.updated", s.storageInfo())
 	writeJSON(w, http.StatusOK, s.storageInfo())
+}
+
+func (s *Server) handleSessionRestart(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		URL string `json:"url"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	sess, err := s.Manager.Restart(r.PathValue("id"), in.URL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "restart_failed", err.Error())
+		return
+	}
+	out := map[string]any{"session_id": sess.ID, "env": sess.EnvID}
+	info := sess.Info()
+	out["url"], out["chrome_version"] = info.URL, info.ChromeVersion
+	s.publish("session.restarted", out)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleEnvRestart(w http.ResponseWriter, r *http.Request) {
+	meta, _, ok := s.findEnv(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	var in struct {
+		URL string `json:"url"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	sess, err := s.Manager.RestartEnv(meta.ID, in.URL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "restart_failed", err.Error())
+		return
+	}
+	info := sess.Info()
+	out := map[string]any{
+		"session_id": sess.ID, "env": sess.EnvID, "url": info.URL,
+		"chrome_version": info.ChromeVersion,
+	}
+	s.publish("session.restarted", out)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleEnvSize(w http.ResponseWriter, r *http.Request) {
+	meta, dir, ok := s.findEnv(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	var in struct {
+		Width   int   `json:"width"`
+		Height  int   `json:"height"`
+		Restart *bool `json:"restart"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.Width < 800 || in.Width > 3840 || in.Height < 600 || in.Height > 2160 {
+		writeError(w, http.StatusBadRequest, "invalid_size", "width must be 800-3840, height 600-2160")
+		return
+	}
+	updated, err := envdir.SetSizeDir(dir, meta, in.Width, in.Height)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "env_size_failed", err.Error())
+		return
+	}
+	_ = s.Registry.Put(updated)
+	restart := true
+	if in.Restart != nil {
+		restart = *in.Restart
+	}
+	sessionID := ""
+	if restart {
+		if sess, ok := s.Manager.SessionForEnv(meta.ID); ok {
+			restarted, err := s.Manager.Restart(sess.ID, "")
+			if err != nil {
+				writeError(w, http.StatusBadGateway, "session_restart_failed", err.Error())
+				return
+			}
+			sessionID = restarted.ID
+		}
+	}
+	s.publish("env.updated", updated)
+	writeJSON(w, http.StatusOK, map[string]any{"env": updated, "session_id": sessionID})
 }
 
 // ---- environment export / import ----

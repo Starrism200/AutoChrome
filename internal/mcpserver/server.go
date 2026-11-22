@@ -130,6 +130,7 @@ func (s *Server) register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "env_create", Description: "Create a browser environment directory with a deterministic fingerprint."}, s.envCreate)
 	mcp.AddTool(srv, &mcp.Tool{Name: "env_list", Description: "List browser environments for this user."}, s.envList)
 	mcp.AddTool(srv, &mcp.Tool{Name: "browser_open", Description: "Start a browser session for an environment."}, s.browserOpen)
+	mcp.AddTool(srv, &mcp.Tool{Name: "browser_restart", Description: "Restart a session or environment browser (e.g. after closing the last tab)."}, s.browserRestart)
 	mcp.AddTool(srv, &mcp.Tool{Name: "browser_close", Description: "Close a browser session."}, s.browserClose)
 	mcp.AddTool(srv, &mcp.Tool{Name: "browser_list", Description: "List live browser sessions."}, s.browserList)
 	mcp.AddTool(srv, &mcp.Tool{Name: "browser_navigate", Description: "Navigate a session to a URL."}, s.browserNavigate)
@@ -282,6 +283,12 @@ type BrowserOpenIn struct {
 	Headless      bool   `json:"headless,omitempty" jsonschema:"run Chrome headless instead of on Xvfb"`
 }
 
+type BrowserRestartIn struct {
+	SessionID string `json:"session_id,omitempty" jsonschema:"session id to restart"`
+	Env       string `json:"env,omitempty" jsonschema:"environment id to restart or open"`
+	URL       string `json:"url,omitempty" jsonschema:"optional page URL; defaults to the last URL"`
+}
+
 type BrowserOpenOut struct {
 	SessionID     string `json:"session_id"`
 	Env           string `json:"env"`
@@ -297,6 +304,34 @@ func (s *Server) browserOpen(_ context.Context, _ *mcp.CallToolRequest, in Brows
 	}
 	info := sess.Info()
 	out := BrowserOpenOut{SessionID: sess.ID, Env: sess.EnvID, URL: in.URL, ChromeVersion: info.ChromeVersion}
+	_ = sess.Do(func(ctx context.Context) error {
+		out.URL, _ = browser.Location(ctx)
+		out.Title, _ = browser.Title(ctx)
+		return nil
+	})
+	return nil, out, nil
+}
+
+func (s *Server) browserRestart(_ context.Context, _ *mcp.CallToolRequest, in BrowserRestartIn) (*mcp.CallToolResult, BrowserOpenOut, error) {
+	var (
+		sess *session.Session
+		err  error
+	)
+	switch {
+	case in.SessionID != "":
+		sess, err = s.Manager.Restart(in.SessionID, in.URL)
+	case in.Env != "":
+		sess, err = s.Manager.RestartEnv(in.Env, in.URL)
+	default:
+		return nil, BrowserOpenOut{}, fmt.Errorf("session_id or env is required")
+	}
+	if err != nil {
+		return nil, BrowserOpenOut{}, err
+	}
+	info := sess.Info()
+	out := BrowserOpenOut{
+		SessionID: sess.ID, Env: sess.EnvID, URL: info.URL, ChromeVersion: info.ChromeVersion,
+	}
 	_ = sess.Do(func(ctx context.Context) error {
 		out.URL, _ = browser.Location(ctx)
 		out.Title, _ = browser.Title(ctx)

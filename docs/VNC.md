@@ -122,7 +122,25 @@ DISPLAY=:100 ./bin/autochrome mcp -user alice
 
 两个端口都只监听 `127.0.0.1`。范围用尽时会报错并提示调整。
 
-## 5. 安全
+## 5. 关闭最后一个标签页后
+
+不需要重启 `serve` 或容器，调用：
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8787/api/v1/containers/<name>/restart
+```
+
+VNC 桌面会保留，重新拉起的 Chrome 窗口会出现在同一画布上。
+
+## 6. 画布大小
+
+当前 noVNC 画布是**每个用户进程一个 Xvfb 屏幕**，默认 `1366x900`。容器级
+`PUT /containers/{name}/size` 只改变该容器 Chrome 的视口/窗口大小，不会改变
+noVNC 画布本身。如果需要每个容器独立画布大小，需要每容器独立 Xvfb/VNC，
+这是另一套部署模式。
+
+## 7. 安全
 
 默认已经做了这些限制：
 
@@ -145,7 +163,7 @@ ssh -L 16001:127.0.0.1:16001 user@host
 - 放在带 TLS 和认证的反向代理后面
 - 不要直接暴露 5900 或 noVNC 端口到公网
 
-## 6. 多用户
+## 8. 多用户
 
 每个用户一个独立进程、独立 Xvfb、独立 VNC 端口，互不可见。
 L2 模型下通过不同 `-user` 启动即可：
@@ -155,7 +173,7 @@ L2 模型下通过不同 `-user` 启动即可：
 ./bin/autochrome mcp -user bob   --vnc --vnc-port-start 16100 --vnc-port-end 16199
 ```
 
-## 7. 常见问题
+## 9. 常见问题
 
 **`noVNC not found`**
 

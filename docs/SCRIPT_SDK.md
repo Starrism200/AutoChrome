@@ -71,6 +71,7 @@ manifest：
 | 方法 | 说明 |
 |---|---|
 | `page.goto(url)` | 导航 |
+| `page.restart({url?})` | 重新拉起浏览器并返回新的 page |
 | `page.reload()` | 刷新当前页面 |
 | `page.back()` | 后退 |
 | `page.url()` / `page.title()` | 当前 URL / 标题 |

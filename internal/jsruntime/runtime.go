@@ -267,6 +267,16 @@ func (r *Runner) pageObject(vm *goja.Runtime, s *session.Session) *goja.Object {
 		return goja.Undefined()
 	})
 
+	_ = page.Set("restart", func(call goja.FunctionCall) goja.Value {
+		opts := objectArg(call, 0)
+		newSess, err := r.Manager.Restart(s.ID, stringOpt(opts, "url"))
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		r.track(newSess.ID)
+		return r.pageObject(vm, newSess)
+	})
+
 	_ = page.Set("reload", func(call goja.FunctionCall) goja.Value {
 		if err := s.Do(func(ctx context.Context) error { return browser.Reload(ctx) }); err != nil {
 			panic(vm.NewGoError(err))

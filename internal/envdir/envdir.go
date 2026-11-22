@@ -151,6 +151,17 @@ func Find(root, id string) (Meta, string, bool) {
 	return Meta{}, "", false
 }
 
+// SetSizeDir updates the per-environment browser viewport size.
+func SetSizeDir(dir string, meta Meta, width, height int) (Meta, error) {
+	meta.Fingerprint.Width = width
+	meta.Fingerprint.Height = height
+	meta.UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := writeMeta(dir, meta); err != nil {
+		return Meta{}, err
+	}
+	return meta, nil
+}
+
 // SetChromeDir writes a Chrome version binding to an explicit environment.
 func SetChromeDir(dir string, meta Meta, version string) (Meta, error) {
 	meta.ChromeVersion = version

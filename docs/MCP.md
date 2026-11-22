@@ -80,6 +80,7 @@ opencode / Claude Desktop / Cursor 等通用写法：
 | `env_create` | 创建环境目录和确定性指纹 |
 | `env_list` | 列出当前用户的环境 |
 | `browser_open` | 启动一个会话，返回 `session_id`；支持 `chrome_version` |
+| `browser_restart` | 重新拉起会话/容器浏览器，`{session_id?, env?, url?}` |
 | `browser_close` | 关闭会话 |
 | `browser_list` | 列出存活会话 |
 | `browser_navigate` | 导航到 URL |

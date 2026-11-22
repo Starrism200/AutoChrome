@@ -30,6 +30,8 @@ English | [简体中文](README.zh-CN.md)
 - SSE events, batch session open, token rotation and interval schedules
 - Remote MCP over Streamable HTTP (`serve --mcp`)
 - Asynchronous script jobs with persistent logs and cancellation
+- Restart sessions/containers without restarting the service
+- Per-container Chrome viewport size (noVNC canvas remains per-user Xvfb)
 - OpenAPI document at `/api/v1/openapi.yaml`
 - Cookie + user-agent export/import
 - Short-lived interaction page for QR / OTP / CAPTCHA handoff

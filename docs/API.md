@@ -121,9 +121,28 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | DELETE | `/api/v1/containers/{name}/proxy` | 解绑代理 |
 | PUT | `/api/v1/containers/{name}/chrome` | 绑定 Chrome 版本 |
 | DELETE | `/api/v1/containers/{name}/chrome` | 解绑 Chrome 版本 |
+| PUT | `/api/v1/containers/{name}/size` | 设置浏览器视口，默认重启会话 |
+| POST | `/api/v1/containers/{name}/restart` | 重新拉起容器浏览器 |
 
 `id` 创建后不可变；`name` 可修改且在同一用户下唯一。目录名由 `id` 决定，
 每个容器独立，不会因为改名而移动目录。
+
+关闭 VNC 里最后一个标签页后，不需要重启服务或容器，调用：
+
+```bash
+curl -X POST -H "$H" "$BASE/containers/demo/restart"
+```
+
+容器尺寸接口：
+
+```bash
+curl -X PUT -H "$H" -H 'Content-Type: application/json' \
+  -d '{"width":1920,"height":1080,"restart":true}' \
+  "$BASE/containers/demo/size"
+```
+
+这只改变该容器的 Chrome 视口/窗口大小；**noVNC 画布大小仍是该用户进程的
+Xvfb 屏幕**，当前不是每容器独立画布。
 
 ### 环境打包
 
@@ -162,6 +181,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | DELETE | `/api/v1/sessions` | 关闭所有会话 |
 | GET | `/api/v1/sessions/{id}` | 会话信息 |
 | DELETE | `/api/v1/sessions/{id}` | 关闭会话 |
+| POST | `/api/v1/sessions/{id}/restart` | 重新拉起浏览器 `{url?}`，不需要重启服务 |
 
 ### 页面
 
