@@ -275,6 +275,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /i/{token}/code", s.handleInteractionCode)
 	mux.HandleFunc("POST /i/{token}/click_xy", s.handleInteractionClickXY)
 
+	mux.HandleFunc("GET /vnc", s.handleBrowserAccess)
+	mux.HandleFunc("GET /{$}", s.handleBrowserAccess)
 	mux.HandleFunc("GET /vnc/{token}", s.handleVNC)
 	mux.HandleFunc("GET /vnc/{token}/{path...}", s.handleVNC)
 
@@ -286,7 +288,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/openapi.yaml" || strings.HasPrefix(r.URL.Path, "/i/") || strings.HasPrefix(r.URL.Path, "/vnc/") {
+		if r.URL.Path == "/" || r.URL.Path == "/vnc" || r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/openapi.yaml" || strings.HasPrefix(r.URL.Path, "/i/") || strings.HasPrefix(r.URL.Path, "/vnc/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1962,6 +1964,33 @@ func (s *Server) handleAuthImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---- browser access ----
+
+func (s *Server) handleBrowserAccess(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><title>AutoChrome</title>
+<h1>AutoChrome</h1>
+<p>API: <code>/api/v1</code></p>
+<p>VNC: <code>/vnc?token=&lt;api_token&gt;</code></p>`)
+		return
+	}
+	s.tokenMu.RLock()
+	current := s.Token
+	s.tokenMu.RUnlock()
+	if subtle.ConstantTimeCompare([]byte(token), []byte(current)) != 1 {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "invalid token")
+		return
+	}
+	if s.Desktop == nil {
+		writeError(w, http.StatusBadRequest, "vnc_disabled", "VNC is not enabled")
+		return
+	}
+	vt := s.newVNCToken(s.Desktop.Info().WebPort)
+	http.Redirect(w, r, "/vnc/"+vt+"/vnc.html?autoconnect=1&resize=scale&reconnect=1", http.StatusFound)
 }
 
 // ---- helpers ----
