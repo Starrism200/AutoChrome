@@ -53,6 +53,7 @@ data/users/<id>/
 ./bin/autochrome open -user alice -id account-01 -url https://example.com
 ./bin/autochrome script run example -user alice -input '{"url":"https://example.com"}'
 ./bin/autochrome mcp -user alice
+./bin/autochrome serve -user alice -addr 127.0.0.1:8787
 ```
 
 也可以设置环境变量：
@@ -101,7 +102,7 @@ export AUTOCHROME_USER=alice
 L2 能做到：
 
 - 目录隔离：profiles、scripts、screenshots、logs
-- 进程隔离：一个 MCP 服务器只服务一个用户
+- 进程隔离：一个 MCP 或 HTTP 服务器只服务一个用户
 - 并发隔离：独立槽位目录和 `max_browsers`
 - 权限隔离：是否允许 eval / scripts
 
@@ -114,7 +115,19 @@ L2 不能做到：
 需要更强隔离时，为每个用户使用独立的系统账号或容器，并分别启动
 `autochrome mcp -user <id>`。
 
-## 5. VNC 与用户隔离
+## 5. HTTP API 与用户隔离
+
+`autochrome serve` 每个进程只服务一个用户，token 保存在
+`data/users/<id>/api_token`。多用户时启动多个端口：
+
+```bash
+./bin/autochrome serve -user alice -addr 127.0.0.1:8787
+./bin/autochrome serve -user bob   -addr 127.0.0.1:8788
+```
+
+详见 [API.md](API.md)。
+
+## 6. VNC 与用户隔离
 
 每个用户启动自己的 desktop：
 
@@ -129,7 +142,7 @@ L2 不能做到：
 - 只监听 127.0.0.1，远程访问建议 SSH 隧道
 - 详见 [VNC.md](VNC.md)
 
-## 6. 项目根目录
+## 7. 项目根目录
 
 MCP 客户端启动进程时的工作目录可能不是项目根目录。AutoChrome 按以下顺序
 确定根目录：
@@ -140,7 +153,7 @@ MCP 客户端启动进程时的工作目录可能不是项目根目录。AutoChr
 
 推荐在 MCP 配置中显式设置 `AUTOCHROME_HOME`。
 
-## 7. 迁移
+## 8. 迁移
 
 已有的 `profiles/`、`scripts/custom/`、`data/` 仍属于 `default` 用户，
 无需迁移。新用户从 `data/users/<id>/` 开始。

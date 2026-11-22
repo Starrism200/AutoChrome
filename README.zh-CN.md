@@ -17,6 +17,7 @@
 - 跨进程浏览器并发上限（`flock` 槽位）
 - 内置同步 JavaScript SDK（`ac` / `page`），无需 Node.js
 - stdio MCP 服务器，提供浏览器工具与资源
+- HTTP/JSON API（`autochrome serve`），Bearer Token 认证
 - VNC/noVNC 远程桌面，支持真人接管（扫码、短信验证码、打码）
 - 二维码/OTP/验证码检测、二维码截图与坐标点击
 - 多用户隔离（L2：每用户一个 MCP 进程和独立目录树）
@@ -144,6 +145,23 @@ return { title, nodes: snap.nodes.length };
 脚本工具，以及 `autochrome://envs`、`autochrome://sessions` 资源。
 详见 [docs/MCP.md](docs/MCP.md)。
 
+## HTTP API
+
+```bash
+./bin/autochrome serve -user alice -addr 127.0.0.1:8787
+```
+
+服务使用用户级 token，存放在 `data/users/alice/api_token`，在 `/api/v1` 下提供
+环境、会话、导航、快照、截图、验证码检测、脚本和 VNC 信息。
+
+```bash
+TOKEN=$(cat data/users/alice/api_token)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8787/api/v1/sessions
+```
+
+详见 [docs/API.md](docs/API.md)。
+
 ## VNC / 人工接管
 
 ```bash
@@ -183,6 +201,7 @@ internal/session/      长生命周期浏览器会话
 internal/jsruntime/    嵌入式 JavaScript SDK（goja）
 internal/scripts/      脚本发现与 manifest
 internal/mcpserver/    MCP stdio 服务器
+internal/apiserver/    HTTP/JSON API 服务器
 internal/xvfb/         共享虚拟显示器
 internal/desktop/      VNC/noVNC 远程桌面服务
 internal/ua/           UA 常量
@@ -202,3 +221,4 @@ docs/                  安装、浏览器、SDK、MCP 与多用户文档
 - [docs/MULTIUSER.md](docs/MULTIUSER.md)：多用户模型、目录与权限
 - [docs/VNC.md](docs/VNC.md)：x11vnc + noVNC、端口与安全
 - [docs/INTERACTION.md](docs/INTERACTION.md)：扫码、验证码、打码的人工接力
+- [docs/API.md](docs/API.md)：HTTP/JSON API、认证与示例

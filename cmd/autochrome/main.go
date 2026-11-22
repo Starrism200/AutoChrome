@@ -19,6 +19,7 @@ import (
 
 	"github.com/chromedp/chromedp"
 
+	"autochrome/internal/apiserver"
 	"autochrome/internal/browser"
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
@@ -52,6 +53,8 @@ func main() {
 		cmdMCP(os.Args[2:])
 	case "desktop":
 		cmdDesktop(os.Args[2:])
+	case "serve":
+		cmdServe(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -71,6 +74,7 @@ Usage:
   autochrome script      list | run <name> [-input JSON]
   autochrome mcp         [-user USER] [--vnc] [--allow-eval] [--allow-scripts]
   autochrome desktop     [-user USER] [--vnc-password PASS] [--port-start N] [--port-end N]
+  autochrome serve       [-user USER] [-addr 127.0.0.1:8787] [--vnc] [--token TOKEN]
 
 The default user keeps the historical layout (profiles/, scripts/custom/, data/).
 Other users live under data/users/<id>/.
@@ -461,6 +465,79 @@ func cmdDesktop(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	<-ctx.Done()
+}
+
+func cmdServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	userID := fs.String("user", "", "user id (default: $AUTOCHROME_USER or default)")
+	addr := fs.String("addr", "127.0.0.1:8787", "HTTP listen address")
+	token := fs.String("token", "", "API bearer token (also $AUTOCHROME_API_TOKEN)")
+	cors := fs.String("cors", "", "optional Access-Control-Allow-Origin value")
+	chrome := fs.String("chrome", "/usr/bin/google-chrome", "Chrome executable")
+	allowEval := fs.Bool("allow-eval", false, "force-enable POST /eval")
+	allowScripts := fs.Bool("allow-scripts", false, "force-enable POST /scripts/{name}/run")
+	vnc := fs.Bool("vnc", false, "start x11vnc + noVNC")
+	vncPassword := fs.String("vnc-password", "", "optional VNC password (also $AUTOCHROME_VNC_PASSWORD)")
+	vncStart := fs.Int("vnc-port-start", 0, "override first port for auto-assigned VNC/noVNC ports")
+	vncEnd := fs.Int("vnc-port-end", 0, "override last port for auto-assigned VNC/noVNC ports")
+	_ = fs.Parse(args)
+
+	u, err := users.Resolve(*userID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	srv := apiserver.New(u, *chrome)
+	srv.Addr = *addr
+	srv.AllowOrigin = *cors
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if set["allow-eval"] {
+		srv.AllowEval = *allowEval
+	}
+	if set["allow-scripts"] {
+		srv.AllowScripts = *allowScripts
+	}
+
+	apiToken, provided := *token, *token != ""
+	if apiToken == "" {
+		apiToken = os.Getenv("AUTOCHROME_API_TOKEN")
+		provided = apiToken != ""
+	}
+	generated := false
+	if apiToken == "" {
+		apiToken, err = apiserver.LoadOrCreateToken(u)
+		if err != nil {
+			log.Fatalf("api token: %v", err)
+		}
+		generated = true
+	}
+	srv.Token = apiToken
+
+	if *vnc {
+		d, err := startDesktop(u, *vncPassword, *vncStart, *vncEnd)
+		if err != nil {
+			log.Fatalf("vnc: %v", err)
+		}
+		defer d.Close()
+		srv.Desktop = d
+		log.Printf("vnc: %s (display %s)", d.Info().URL, d.Info().Display)
+	}
+
+	log.Printf("api: http://%s/api/v1 (user %s)", *addr, u.ID)
+	switch {
+	case provided:
+		log.Printf("api token: provided by flag or AUTOCHROME_API_TOKEN")
+	case generated:
+		log.Printf("api token: %s", apiToken)
+	default:
+		log.Printf("api token file: %s", apiserver.TokenPath(u))
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := srv.Run(ctx); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func startDesktop(u users.User, password string, portStart, portEnd int) (*desktop.Desktop, error) {

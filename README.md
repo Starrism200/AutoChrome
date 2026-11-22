@@ -20,6 +20,7 @@ English | [简体中文](README.zh-CN.md)
 - Cross-process browser concurrency limit using `flock` slots
 - Embedded JavaScript script SDK (`ac` / `page`) without a Node.js dependency
 - MCP stdio server with browser tools and resources
+- HTTP/JSON API (`autochrome serve`) with Bearer authentication
 - VNC/noVNC desktop for human takeover (QR scan, SMS code, CAPTCHA)
 - Challenge detection, QR capture and coordinate clicks
 - Multi-user isolation (L2: one MCP process and one directory tree per user)
@@ -150,6 +151,24 @@ wait, screenshot, cookie, eval and script tools, plus `autochrome://envs` and
 `autochrome://sessions` resources.
 See [docs/MCP.md](docs/MCP.md).
 
+## HTTP API
+
+```bash
+./bin/autochrome serve -user alice -addr 127.0.0.1:8787
+```
+
+The server uses a per-user token stored at `data/users/alice/api_token` and
+exposes environments, sessions, navigation, snapshots, screenshots, challenges,
+scripts and VNC information under `/api/v1`.
+
+```bash
+TOKEN=$(cat data/users/alice/api_token)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8787/api/v1/sessions
+```
+
+See [docs/API.md](docs/API.md).
+
 ## VNC / human takeover
 
 ```bash
@@ -191,6 +210,7 @@ internal/session/      Long-lived browser sessions
 internal/jsruntime/    Embedded JavaScript SDK (goja)
 internal/scripts/      Script discovery and manifests
 internal/mcpserver/    MCP stdio server
+internal/apiserver/    HTTP/JSON API server
 internal/xvfb/         Shared virtual display
 internal/desktop/      VNC/noVNC desktop service
 internal/ua/           User-agent constants
@@ -210,3 +230,4 @@ docs/                  Installation, browser, SDK, MCP and multi-user notes
 - [docs/MULTIUSER.md](docs/MULTIUSER.md) (Chinese)
 - [docs/VNC.md](docs/VNC.md) (Chinese)
 - [docs/INTERACTION.md](docs/INTERACTION.md) (Chinese)
+- [docs/API.md](docs/API.md) (Chinese)

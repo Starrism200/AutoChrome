@@ -4,6 +4,9 @@ MCP（Model Context Protocol）是 AI 客户端调用外部工具的标准协议
 AutoChrome 以 stdio MCP 服务器形式运行，AI 客户端（Claude Desktop、Claude Code、
 Cursor、VS Code、opencode 等）可以直接打开浏览器、读取页面、点击和输入。
 
+如果需要给前端、脚本或其它后端调用的 HTTP/JSON 接口，使用 `autochrome serve`，
+见 [API.md](API.md)。
+
 ## 1. 启动
 
 ```bash
