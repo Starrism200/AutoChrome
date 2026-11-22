@@ -17,13 +17,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/chromedp/cdproto/network"
 
 	"autochrome/internal/browser"
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
 	"autochrome/internal/fingerprint"
 	"autochrome/internal/jsruntime"
+	"autochrome/internal/proxy"
 	"autochrome/internal/scripts"
 	"autochrome/internal/session"
 	"autochrome/internal/users"
@@ -43,6 +47,15 @@ type Server struct {
 	AllowScripts bool
 	Desktop      *desktop.Desktop
 	Manager      *session.Manager
+	Proxies      *proxy.Store
+
+	interMu      sync.Mutex
+	interactions map[string]*interaction
+}
+
+type interaction struct {
+	SessionID string
+	Expires   time.Time
 }
 
 // New returns a server for u.
@@ -53,6 +66,8 @@ func New(u users.User, chrome string) *Server {
 		Addr:         "127.0.0.1:8787",
 		AllowEval:    u.AllowEval,
 		AllowScripts: u.AllowScripts,
+		Proxies:      proxy.NewStore(filepath.Join(u.Home, "data", "users", u.ID, "proxies.json")),
+		interactions: map[string]*interaction{},
 	}
 }
 
@@ -96,13 +111,28 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/envs", s.handleEnvList)
 	mux.HandleFunc("POST /api/v1/envs", s.handleEnvCreate)
+	mux.HandleFunc("GET /api/v1/envs/{id}", s.handleEnvGet)
+	mux.HandleFunc("DELETE /api/v1/envs/{id}", s.handleEnvDelete)
+	mux.HandleFunc("PUT /api/v1/envs/{id}/proxy", s.handleEnvBindProxy)
+	mux.HandleFunc("DELETE /api/v1/envs/{id}/proxy", s.handleEnvUnbindProxy)
+
+	mux.HandleFunc("GET /api/v1/proxies", s.handleProxyList)
+	mux.HandleFunc("POST /api/v1/proxies", s.handleProxyAdd)
+	mux.HandleFunc("GET /api/v1/proxies/{id}", s.handleProxyGet)
+	mux.HandleFunc("PATCH /api/v1/proxies/{id}", s.handleProxyUpdate)
+	mux.HandleFunc("PUT /api/v1/proxies/{id}", s.handleProxyUpdate)
+	mux.HandleFunc("DELETE /api/v1/proxies/{id}", s.handleProxyDelete)
+	mux.HandleFunc("POST /api/v1/proxies/{id}/check", s.handleProxyCheck)
 
 	mux.HandleFunc("GET /api/v1/sessions", s.handleSessionList)
 	mux.HandleFunc("POST /api/v1/sessions", s.handleSessionCreate)
+	mux.HandleFunc("DELETE /api/v1/sessions", s.handleSessionCloseAll)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", s.handleSessionGet)
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.handleSessionDelete)
 
 	mux.HandleFunc("POST /api/v1/sessions/{id}/navigate", s.handleNavigate)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/reload", s.handleReload)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/back", s.handleBack)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/snapshot", s.handleSnapshot)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/click", s.handleClick)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/type", s.handleType)
@@ -111,20 +141,33 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/eval", s.handleEval)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/screenshot", s.handleScreenshot)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/cookies", s.handleCookies)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/cookies", s.handleCookiesSet)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/challenges", s.handleChallenges)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/qr", s.handleQR)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/click_xy", s.handleClickXY)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/scroll", s.handleScroll)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/interaction", s.handleInteraction)
 
 	mux.HandleFunc("GET /api/v1/scripts", s.handleScriptList)
+	mux.HandleFunc("GET /api/v1/scripts/{name}", s.handleScriptGet)
+	mux.HandleFunc("PUT /api/v1/scripts/{name}", s.handleScriptWrite)
+	mux.HandleFunc("DELETE /api/v1/scripts/{name}", s.handleScriptDelete)
 	mux.HandleFunc("POST /api/v1/scripts/{name}/run", s.handleScriptRun)
 
 	mux.HandleFunc("GET /api/v1/desktop", s.handleDesktop)
+
+	mux.HandleFunc("GET /i/{token}", s.handleInteractionPage)
+	mux.HandleFunc("GET /i/{token}/state", s.handleInteractionState)
+	mux.HandleFunc("GET /i/{token}/screenshot", s.handleInteractionScreenshot)
+	mux.HandleFunc("GET /i/{token}/qr", s.handleInteractionQR)
+	mux.HandleFunc("GET /i/{token}/vnc", s.handleInteractionVNC)
+	mux.HandleFunc("POST /i/{token}/code", s.handleInteractionCode)
+	mux.HandleFunc("POST /i/{token}/click_xy", s.handleInteractionClickXY)
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/health" {
+		if r.URL.Path == "/api/v1/health" || strings.HasPrefix(r.URL.Path, "/i/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -229,17 +272,31 @@ func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 		Platform string `json:"platform"`
 		URL      string `json:"url"`
 		Proxy    string `json:"proxy"`
+		ProxyID  string `json:"proxy_id"`
 		Headless bool   `json:"headless"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	sess, err := s.Manager.Open(in.Env, in.Platform, in.URL, in.Proxy, in.Headless)
+	proxyURL := in.Proxy
+	if in.ProxyID != "" {
+		p, err := s.Proxies.Get(in.ProxyID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "proxy_not_found", err.Error())
+			return
+		}
+		if !p.Enabled {
+			writeError(w, http.StatusBadRequest, "proxy_disabled", "proxy is disabled")
+			return
+		}
+		proxyURL = p.URL
+	}
+	sess, err := s.Manager.Open(in.Env, in.Platform, in.URL, proxyURL, in.Headless)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "open_failed", err.Error())
 		return
 	}
-	out := map[string]any{"session_id": sess.ID, "env": sess.EnvID}
+	out := map[string]any{"session_id": sess.ID, "env": sess.EnvID, "proxy_id": in.ProxyID}
 	_ = sess.Do(func(ctx context.Context) error {
 		out["url"], _ = browser.Location(ctx)
 		out["title"], _ = browser.Title(ctx)
@@ -254,6 +311,11 @@ func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sess.Info())
+}
+
+func (s *Server) handleSessionCloseAll(w http.ResponseWriter, _ *http.Request) {
+	s.Manager.CloseAll()
+	writeJSON(w, http.StatusOK, map[string]any{"closed": true})
 }
 
 func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
@@ -295,6 +357,30 @@ func (s *Server) handleNavigate(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.SetURL(out.URL)
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	if err := sess.Do(func(ctx context.Context) error { return browser.Reload(ctx) }); err != nil {
+		writeError(w, http.StatusBadGateway, "reload_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleBack(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	if err := sess.Do(func(ctx context.Context) error { return browser.Back(ctx) }); err != nil {
+		writeError(w, http.StatusBadGateway, "back_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -494,6 +580,28 @@ func (s *Server) handleCookies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"cookies": cookies})
 }
 
+func (s *Server) handleCookiesSet(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Cookies []*network.CookieParam `json:"cookies"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if len(in.Cookies) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "cookies is required")
+		return
+	}
+	if err := sess.Do(func(ctx context.Context) error { return browser.SetCookies(ctx, in.Cookies) }); err != nil {
+		writeError(w, http.StatusBadGateway, "cookies_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(in.Cookies)})
+}
+
 func (s *Server) handleChallenges(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.session(w, r)
 	if !ok {
@@ -579,6 +687,65 @@ func (s *Server) handleScriptList(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"scripts": list})
 }
 
+func (s *Server) handleScriptGet(w http.ResponseWriter, r *http.Request) {
+	script, src, err := scripts.Load(s.User.ScriptRoot, r.PathValue("name"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "script_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name": script.Name, "description": script.Description,
+		"timeout": script.Timeout, "inputSchema": script.InputSchema,
+		"source": src,
+	})
+}
+
+func (s *Server) handleScriptWrite(w http.ResponseWriter, r *http.Request) {
+	if !s.AllowScripts {
+		writeError(w, http.StatusForbidden, "scripts_disabled", "scripts are disabled for this user")
+		return
+	}
+	var in struct {
+		Source      string         `json:"source"`
+		Description string         `json:"description"`
+		Timeout     string         `json:"timeout"`
+		InputSchema map[string]any `json:"inputSchema"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	var manifest map[string]any
+	if in.Description != "" || in.Timeout != "" || in.InputSchema != nil {
+		manifest = map[string]any{}
+		if in.Description != "" {
+			manifest["description"] = in.Description
+		}
+		if in.Timeout != "" {
+			manifest["timeout"] = in.Timeout
+		}
+		if in.InputSchema != nil {
+			manifest["inputSchema"] = in.InputSchema
+		}
+	}
+	if err := scripts.Write(s.User.ScriptRoot, r.PathValue("name"), in.Source, manifest); err != nil {
+		writeError(w, http.StatusBadRequest, "script_write_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": r.PathValue("name")})
+}
+
+func (s *Server) handleScriptDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.AllowScripts {
+		writeError(w, http.StatusForbidden, "scripts_disabled", "scripts are disabled for this user")
+		return
+	}
+	if err := scripts.Delete(s.User.ScriptRoot, r.PathValue("name")); err != nil {
+		writeError(w, http.StatusNotFound, "script_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
 func (s *Server) handleScriptRun(w http.ResponseWriter, r *http.Request) {
 	if !s.AllowScripts {
 		writeError(w, http.StatusForbidden, "scripts_disabled", "scripts are disabled for this user")
@@ -624,6 +791,446 @@ func (s *Server) handleDesktop(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "desktop": s.Desktop.Info()})
+}
+
+// ---- proxy management ----
+
+type proxyInput struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	URL     string   `json:"url"`
+	Enabled *bool    `json:"enabled"`
+	Tags    []string `json:"tags"`
+}
+
+func (s *Server) handleProxyList(w http.ResponseWriter, _ *http.Request) {
+	list, err := s.Proxies.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "proxy_list_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"proxies": list})
+}
+
+func (s *Server) handleProxyAdd(w http.ResponseWriter, r *http.Request) {
+	var in proxyInput
+	if !decode(w, r, &in) {
+		return
+	}
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	p, err := s.Proxies.Add(proxy.Proxy{ID: in.ID, Name: in.Name, URL: in.URL, Enabled: enabled, Tags: in.Tags})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "proxy_add_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (s *Server) handleProxyGet(w http.ResponseWriter, r *http.Request) {
+	p, err := s.Proxies.Get(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "proxy_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handleProxyUpdate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name    *string   `json:"name"`
+		URL     *string   `json:"url"`
+		Enabled *bool     `json:"enabled"`
+		Tags    *[]string `json:"tags"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	p, err := s.Proxies.Update(r.PathValue("id"), func(p *proxy.Proxy) error {
+		if in.Name != nil {
+			p.Name = *in.Name
+		}
+		if in.URL != nil {
+			p.URL = *in.URL
+		}
+		if in.Enabled != nil {
+			p.Enabled = *in.Enabled
+		}
+		if in.Tags != nil {
+			p.Tags = *in.Tags
+		}
+		return nil
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "proxy_update_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handleProxyDelete(w http.ResponseWriter, r *http.Request) {
+	if err := s.Proxies.Delete(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusNotFound, "proxy_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+func (s *Server) handleProxyCheck(w http.ResponseWriter, r *http.Request) {
+	p, err := s.Proxies.Check(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "proxy_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// ---- environment management ----
+
+func (s *Server) handleEnvGet(w http.ResponseWriter, r *http.Request) {
+	meta, _, ok := envdir.Find(s.User.EnvRoot, r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "environment not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, meta)
+}
+
+func (s *Server) handleEnvDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, _, ok := envdir.Find(s.User.EnvRoot, id); !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "environment not found")
+		return
+	}
+	s.Manager.CloseEnv(id)
+	if err := envdir.Delete(s.User.EnvRoot, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "env_delete_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+func (s *Server) handleEnvBindProxy(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ProxyID string `json:"proxy_id"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.ProxyID == "" {
+		meta, err := envdir.SetProxy(s.User.EnvRoot, r.PathValue("id"), "", "")
+		if err != nil {
+			writeError(w, http.StatusNotFound, "env_not_found", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, meta)
+		return
+	}
+	p, err := s.Proxies.Get(in.ProxyID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "proxy_not_found", err.Error())
+		return
+	}
+	if !p.Enabled {
+		writeError(w, http.StatusBadRequest, "proxy_disabled", "proxy is disabled")
+		return
+	}
+	meta, err := envdir.SetProxy(s.User.EnvRoot, r.PathValue("id"), p.ID, p.URL)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "env_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, meta)
+}
+
+func (s *Server) handleEnvUnbindProxy(w http.ResponseWriter, r *http.Request) {
+	meta, err := envdir.SetProxy(s.User.EnvRoot, r.PathValue("id"), "", "")
+	if err != nil {
+		writeError(w, http.StatusNotFound, "env_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, meta)
+}
+
+// ---- interaction page ----
+
+func (s *Server) newInteraction(sessionID string) (string, time.Time) {
+	buf := make([]byte, 16)
+	_, _ = rand.Read(buf)
+	token := hex.EncodeToString(buf)
+	expires := time.Now().Add(15 * time.Minute)
+	s.interMu.Lock()
+	for k, v := range s.interactions {
+		if time.Now().After(v.Expires) {
+			delete(s.interactions, k)
+		}
+	}
+	s.interactions[token] = &interaction{SessionID: sessionID, Expires: expires}
+	s.interMu.Unlock()
+	return token, expires
+}
+
+func (s *Server) lookupInteraction(token string) (string, bool) {
+	s.interMu.Lock()
+	defer s.interMu.Unlock()
+	v, ok := s.interactions[token]
+	if !ok {
+		return "", false
+	}
+	if time.Now().After(v.Expires) {
+		delete(s.interactions, token)
+		return "", false
+	}
+	return v.SessionID, true
+}
+
+func (s *Server) interactionSession(w http.ResponseWriter, r *http.Request) (*session.Session, bool) {
+	sid, ok := s.lookupInteraction(r.PathValue("token"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "interaction_not_found", "interaction token expired or unknown")
+		return nil, false
+	}
+	sess, err := s.Manager.Get(sid)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session_not_found", err.Error())
+		return nil, false
+	}
+	return sess, true
+}
+
+func (s *Server) handleInteraction(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	token, expires := s.newInteraction(sess.ID)
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	host := r.Host
+	if host == "" {
+		host = s.Addr
+	}
+	base := scheme + "://" + host + "/i/" + token
+	vncURL := ""
+	if s.Desktop != nil {
+		vncURL = s.Desktop.Info().URL
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id":     sess.ID,
+		"page_url":       base,
+		"screenshot_url": base + "/screenshot",
+		"qr_url":         base + "/qr",
+		"state_url":      base + "/state",
+		"vnc_url":        vncURL,
+		"expires_at":     expires.Format(time.RFC3339),
+	})
+}
+
+const interactionHTML = `<!doctype html>
+<html><head><meta charset="utf-8"><title>AutoChrome interaction</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:20px;background:#111;color:#eee}
+a{color:#6cf} img{border:1px solid #333;max-width:100%}
+.row{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
+input,button{padding:8px;margin:4px 0;font-size:14px}
+pre{background:#000;padding:10px;overflow:auto;max-height:120px}
+</style></head><body>
+<h1>AutoChrome interaction</h1>
+<p id="meta">Loading...</p>
+<div class="row">
+<div><h2>Screen</h2><img id="shot" src="__BASE__/screenshot" alt="screen"></div>
+<div><h2>QR / challenge</h2><img id="qr" src="__BASE__/qr" alt="qr" onerror="this.style.display='none'"><p><a href="__BASE__/vnc" target="_blank">Open VNC</a></p></div>
+</div>
+<form id="codeForm">
+<input id="code" placeholder="SMS / email code" autocomplete="one-time-code">
+<input id="selector" placeholder="optional CSS selector">
+<label><input type="checkbox" id="submit" checked> press Enter</label>
+<button type="submit">Submit code</button>
+</form>
+<pre id="result"></pre>
+<script>
+const base = "__BASE__";
+async function refresh(){
+  try {
+    const s = await fetch(base + "/state").then(r => r.json());
+    document.getElementById("meta").textContent = (s.title || "") + "  " + (s.url || "");
+  } catch(e) {}
+  document.getElementById("shot").src = base + "/screenshot?t=" + Date.now();
+  document.getElementById("qr").src = base + "/qr?t=" + Date.now();
+}
+document.getElementById("qr").addEventListener("load", function(){ this.style.display = "block"; });
+document.getElementById("codeForm").addEventListener("submit", async function(e){
+  e.preventDefault();
+  const body = {code: document.getElementById("code").value, selector: document.getElementById("selector").value, submit: document.getElementById("submit").checked};
+  const r = await fetch(base + "/code", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+  document.getElementById("result").textContent = await r.text();
+});
+setInterval(refresh, 2500);
+refresh();
+</script>
+</body></html>`
+
+func (s *Server) handleInteractionPage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.lookupInteraction(r.PathValue("token")); !ok {
+		writeError(w, http.StatusNotFound, "interaction_not_found", "interaction token expired or unknown")
+		return
+	}
+	base := "/i/" + r.PathValue("token")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(strings.ReplaceAll(interactionHTML, "__BASE__", base)))
+}
+
+func (s *Server) handleInteractionState(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.interactionSession(w, r)
+	if !ok {
+		return
+	}
+	var out struct {
+		SessionID  string                       `json:"session_id"`
+		URL        string                       `json:"url"`
+		Title      string                       `json:"title"`
+		Challenges []browser.ChallengeCandidate `json:"challenges"`
+		VNCEnabled bool                         `json:"vnc_enabled"`
+	}
+	out.SessionID = sess.ID
+	out.VNCEnabled = s.Desktop != nil
+	if err := sess.Do(func(ctx context.Context) error {
+		out.URL, _ = browser.Location(ctx)
+		out.Title, _ = browser.Title(ctx)
+		out.Challenges, _ = browser.DetectChallenges(ctx)
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusBadGateway, "state_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleInteractionScreenshot(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.interactionSession(w, r)
+	if !ok {
+		return
+	}
+	fullPage := r.URL.Query().Get("full_page") == "1"
+	var buf []byte
+	if err := sess.Do(func(ctx context.Context) error {
+		b, e := browser.CapturePNG(ctx, fullPage)
+		buf = b
+		return e
+	}); err != nil {
+		writeError(w, http.StatusBadGateway, "screenshot_failed", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
+	_, _ = w.Write(buf)
+}
+
+func (s *Server) handleInteractionQR(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.interactionSession(w, r)
+	if !ok {
+		return
+	}
+	var buf []byte
+	if err := sess.Do(func(ctx context.Context) error {
+		b, _, e := browser.QRCodePNG(ctx)
+		buf = b
+		return e
+	}); err != nil {
+		writeError(w, http.StatusNotFound, "qr_not_found", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
+	_, _ = w.Write(buf)
+}
+
+func (s *Server) handleInteractionVNC(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.lookupInteraction(r.PathValue("token")); !ok {
+		writeError(w, http.StatusNotFound, "interaction_not_found", "interaction token expired or unknown")
+		return
+	}
+	if s.Desktop == nil {
+		writeError(w, http.StatusNotFound, "vnc_disabled", "VNC is not enabled")
+		return
+	}
+	http.Redirect(w, r, s.Desktop.Info().URL, http.StatusFound)
+}
+
+func (s *Server) handleInteractionCode(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.interactionSession(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Code     string `json:"code"`
+		Selector string `json:"selector"`
+		Submit   bool   `json:"submit"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.Code == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "code is required")
+		return
+	}
+	selector := in.Selector
+	if selector == "" {
+		var challenges []browser.ChallengeCandidate
+		_ = sess.Do(func(ctx context.Context) error {
+			challenges, _ = browser.DetectChallenges(ctx)
+			return nil
+		})
+		for _, c := range challenges {
+			if c.Type == "otp" {
+				selector = c.Selector
+				break
+			}
+		}
+	}
+	if selector == "" {
+		writeError(w, http.StatusNotFound, "otp_not_found", "no OTP input detected; pass selector")
+		return
+	}
+	if err := sess.Do(func(ctx context.Context) error {
+		if err := browser.Type(ctx, browser.Target{Selector: selector}, in.Code); err != nil {
+			return err
+		}
+		if in.Submit {
+			return browser.Press(ctx, "\r")
+		}
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusBadGateway, "code_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleInteractionClickXY(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.interactionSession(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if err := sess.Do(func(ctx context.Context) error { return browser.ClickXY(ctx, in.X, in.Y) }); err != nil {
+		writeError(w, http.StatusBadGateway, "click_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ---- helpers ----

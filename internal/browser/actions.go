@@ -440,3 +440,22 @@ func QRCodePNG(ctx context.Context) ([]byte, ChallengeCandidate, error) {
 	}
 	return nil, ChallengeCandidate{}, fmt.Errorf("no QR code detected")
 }
+
+// Reload reloads the current page.
+func Reload(ctx context.Context) error {
+	return chromedp.Do(ctx, chromedp.Reload())
+}
+
+// Back navigates to the previous history entry.
+func Back(ctx context.Context) error {
+	return chromedp.Do(ctx, chromedp.NavigateBack())
+}
+
+// SetCookies writes cookies into the browser context.
+func SetCookies(ctx context.Context, cookies []*network.CookieParam) error {
+	_, err := chromedp.Run(ctx, func(ctx context.Context, t *chromedp.Target) (chromedp.Void, error) {
+		_, err := cdp.Call(ctx, t, network.SetCookies, network.SetCookiesParams{Cookies: cookies})
+		return chromedp.Void{}, err
+	})
+	return err
+}

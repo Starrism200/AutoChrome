@@ -71,6 +71,8 @@ manifest：
 | 方法 | 说明 |
 |---|---|
 | `page.goto(url)` | 导航 |
+| `page.reload()` | 刷新当前页面 |
+| `page.back()` | 后退 |
 | `page.url()` / `page.title()` | 当前 URL / 标题 |
 | `page.snapshot({max?})` | 返回 `{url, title, nodes}`，每个节点带 `ref` |
 | `page.click(target)` | 点击 |

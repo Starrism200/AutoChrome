@@ -77,13 +77,36 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 |---|---|---|
 | GET | `/api/v1/envs` | 环境列表 |
 | POST | `/api/v1/envs` | 创建环境 `{id, platform?}` |
+| GET | `/api/v1/envs/{id}` | 环境详情 |
+| DELETE | `/api/v1/envs/{id}` | 删除环境（会先关闭该环境的会话） |
+| PUT | `/api/v1/envs/{id}/proxy` | 绑定代理 `{proxy_id}` |
+| DELETE | `/api/v1/envs/{id}/proxy` | 解绑代理 |
+
+### 代理
+
+代理保存在 `data/users/<id>/proxies.json`，支持 `http`、`https`、`socks`、
+`socks5`、`socks5h` 或裸 `host:port`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/proxies` | 代理列表 |
+| POST | `/api/v1/proxies` | 新增 `{id?, name?, url, enabled?, tags?}` |
+| GET | `/api/v1/proxies/{id}` | 代理详情 |
+| PATCH | `/api/v1/proxies/{id}` | 修改 `{name?, url?, enabled?, tags?}` |
+| PUT | `/api/v1/proxies/{id}` | 同 PATCH |
+| DELETE | `/api/v1/proxies/{id}` | 删除 |
+| POST | `/api/v1/proxies/{id}/check` | TCP 连通性检测，回写 `last_check_*` |
+
+绑定后，打开该环境的会话时会自动使用绑定的代理；会话请求里的 `proxy` 或
+`proxy_id` 优先级更高。
 
 ### 会话
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/sessions` | 存活会话列表 |
-| POST | `/api/v1/sessions` | 打开会话 `{env, platform?, url?, proxy?, headless?}` |
+| POST | `/api/v1/sessions` | 打开会话 `{env, platform?, url?, proxy?, proxy_id?, headless?}` |
+| DELETE | `/api/v1/sessions` | 关闭所有会话 |
 | GET | `/api/v1/sessions/{id}` | 会话信息 |
 | DELETE | `/api/v1/sessions/{id}` | 关闭会话 |
 
@@ -92,6 +115,8 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/api/v1/sessions/{id}/navigate` | `{url}` |
+| POST | `/api/v1/sessions/{id}/reload` | 刷新当前页面 |
+| POST | `/api/v1/sessions/{id}/back` | 后退 |
 | GET | `/api/v1/sessions/{id}/snapshot?max=300` | 带 `e1` 引用的文本快照 |
 | POST | `/api/v1/sessions/{id}/click` | `{ref?, selector?, text?}` |
 | POST | `/api/v1/sessions/{id}/type` | `{ref?, selector?, text, submit?}` |
@@ -101,16 +126,36 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | GET | `/api/v1/sessions/{id}/screenshot` | 返回 `image/png` |
 | GET | `/api/v1/sessions/{id}/screenshot?json=1&name=a.png` | 返回 JSON（含 base64，可选保存） |
 | GET | `/api/v1/sessions/{id}/cookies?url=...` | Cookie 列表 |
+| POST | `/api/v1/sessions/{id}/cookies` | 写入 Cookie `{cookies:[...]}` |
 | GET | `/api/v1/sessions/{id}/challenges` | 识别二维码 / OTP / 验证码 |
 | GET | `/api/v1/sessions/{id}/qr` | 返回二维码 PNG |
 | POST | `/api/v1/sessions/{id}/click_xy` | `{x, y}` |
 | POST | `/api/v1/sessions/{id}/scroll` | `{dx, dy}` |
+
+### 交互页面
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/sessions/{id}/interaction` | 生成短期交互页面 URL（需 Bearer） |
+| GET | `/i/{token}` | HTML 交互页面（截图 + 二维码 + 验证码输入 + VNC） |
+| GET | `/i/{token}/state` | 当前 URL、标题、challenge 列表 |
+| GET | `/i/{token}/screenshot` | 当前页面 PNG |
+| GET | `/i/{token}/qr` | 二维码 PNG（无二维码返回 404） |
+| GET | `/i/{token}/vnc` | 302 跳转到 noVNC |
+| POST | `/i/{token}/code` | `{code, selector?, submit?}` 输入验证码 |
+| POST | `/i/{token}/click_xy` | `{x, y}` 坐标点击 |
+
+`token` 有效期 15 分钟，只绑定一个会话。拿到 URL 的人可以操作该会话，
+因此不要把 URL 发到不可信的地方。页面内的图片和表单都使用相对路径。
 
 ### 脚本
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/scripts` | 脚本列表 |
+| GET | `/api/v1/scripts/{name}` | 脚本源码与 manifest |
+| PUT | `/api/v1/scripts/{name}` | 新增/替换 `{source, description?, timeout?, inputSchema?}` |
+| DELETE | `/api/v1/scripts/{name}` | 删除脚本 |
 | POST | `/api/v1/scripts/{name}/run` | `{input?, session_id?}`，需 `allow_scripts` |
 
 ### VNC
@@ -150,10 +195,29 @@ curl -s -X POST -H "$H" -H 'Content-Type: application/json' \
   -d '{"url_contains":"/home","timeout_ms":120000}' \
   "$BASE/sessions/$SID/wait"
 
+# 新增代理
+PROXY=$(curl -s -X POST -H "$H" -H 'Content-Type: application/json' \
+  -d '{"name":"fr-1","url":"socks5://127.0.0.1:10801"}' "$BASE/proxies")
+PID=$(echo "$PROXY" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+
+# 检测代理
+curl -s -X POST -H "$H" "$BASE/proxies/$PID/check"
+
+# 绑定到环境
+curl -s -X PUT -H "$H" -H 'Content-Type: application/json' \
+  -d "{\"proxy_id\":\"$PID\"}" "$BASE/envs/account-01/proxy"
+
+# 用环境绑定的代理打开会话
+curl -s -X POST -H "$H" -H 'Content-Type: application/json' \
+  -d '{"env":"account-01","url":"https://example.com"}' "$BASE/sessions"
+
 # 运行脚本
 curl -s -X POST -H "$H" -H 'Content-Type: application/json' \
   -d '{"input":{"url":"https://example.com"}}' \
   "$BASE/scripts/example/run"
+
+# 生成交互页面（扫码/验证码/打码人工接管）
+curl -s -H "$H" "$BASE/sessions/$SID/interaction"
 
 # VNC 地址
 curl -s -H "$H" "$BASE/desktop"
@@ -201,10 +265,22 @@ curl -s -H "$H" "$BASE/sessions/$SID/screenshot?json=1&name=shot.png"
 `wait`、脚本、截图等可能耗时较长。HTTP server 不设置写超时，但建议客户端
 自己设置合理超时，并在业务层使用 `timeout_ms`。
 
-## 10. 安全
+## 10. 尚未提供
+
+以下是常见但当前未内置的接口，可按需增加：
+
+- 会话事件/日志流（SSE/WebSocket）
+- 批量打开会话
+- 代理健康历史、自动轮换
+- API token 轮换
+- OpenAPI/Swagger 文档
+- 任务调度（定时脚本/定时打开）
+
+## 11. 安全
 
 - 默认只监听 `127.0.0.1`
 - 必须携带 token
 - 需要远程访问时放在 TLS 反向代理后面，或使用 SSH 隧道
 - 不要把端口直接暴露到公网
 - `--cors` 只在明确需要浏览器跨域调用时设置
+- 交互页面 token 等同于该会话的临时控制权，按敏感信息处理

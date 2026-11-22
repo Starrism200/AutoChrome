@@ -199,6 +199,20 @@ func (r *Runner) pageObject(vm *goja.Runtime, s *session.Session) *goja.Object {
 		return goja.Undefined()
 	})
 
+	_ = page.Set("reload", func(call goja.FunctionCall) goja.Value {
+		if err := s.Do(func(ctx context.Context) error { return browser.Reload(ctx) }); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return goja.Undefined()
+	})
+
+	_ = page.Set("back", func(call goja.FunctionCall) goja.Value {
+		if err := s.Do(func(ctx context.Context) error { return browser.Back(ctx) }); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return goja.Undefined()
+	})
+
 	_ = page.Set("url", func(call goja.FunctionCall) goja.Value {
 		var out string
 		err := s.Do(func(ctx context.Context) error {

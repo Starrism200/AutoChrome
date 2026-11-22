@@ -24,6 +24,8 @@ type Meta struct {
 	Platform    string              `json:"platform"`
 	Dir         string              `json:"dir"`
 	CreatedAt   string              `json:"created_at"`
+	ProxyID     string              `json:"proxy_id,omitempty"`
+	Proxy       string              `json:"proxy,omitempty"`
 	Fingerprint fingerprint.Profile `json:"fingerprint"`
 }
 
@@ -73,7 +75,7 @@ func Create(root, platform, id string, fp fingerprint.Profile) (string, error) {
 	meta := Meta{ID: id, Platform: platform, Dir: dir, CreatedAt: time.Now().Format(time.RFC3339), Fingerprint: fp}
 	if _, err := os.Stat(filepath.Join(dir, MetaFile)); err != nil {
 		b, _ := json.MarshalIndent(meta, "", "  ")
-		if err := os.WriteFile(filepath.Join(dir, MetaFile), b, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, MetaFile), b, 0o600); err != nil {
 			return "", err
 		}
 	}
@@ -91,7 +93,7 @@ func Ensure(dir string, meta Meta) error {
 	}
 	meta.Dir = dir
 	b, _ := json.MarshalIndent(meta, "", "  ")
-	return os.WriteFile(p, b, 0o644)
+	return os.WriteFile(p, b, 0o600)
 }
 
 // ReadMeta loads env.json if present.
@@ -105,4 +107,83 @@ func ReadMeta(dir string) (Meta, bool) {
 		return Meta{}, false
 	}
 	return m, true
+}
+
+// List returns every environment under root, sorted by id.
+func List(root string) ([]Meta, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []Meta{}, nil
+		}
+		return nil, err
+	}
+	out := []Meta{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if meta, ok := ReadMeta(filepath.Join(root, e.Name())); ok {
+			out = append(out, meta)
+		}
+	}
+	return out, nil
+}
+
+// Find locates an environment by id and returns its metadata and directory.
+func Find(root, id string) (Meta, string, bool) {
+	list, _ := List(root)
+	for _, meta := range list {
+		if meta.ID == id {
+			dir := meta.Dir
+			if dir == "" {
+				dir = filepath.Join(root, Name(meta.Platform, meta.ID))
+			}
+			return meta, dir, true
+		}
+	}
+	return Meta{}, "", false
+}
+
+// SetProxy binds a proxy id/url to an environment.
+func SetProxy(root, id, proxyID, proxyURL string) (Meta, error) {
+	meta, dir, ok := Find(root, id)
+	if !ok {
+		return Meta{}, fmt.Errorf("environment %q not found", id)
+	}
+	if !withinRoot(root, dir) {
+		return Meta{}, fmt.Errorf("refusing to write %q outside %q", dir, root)
+	}
+	meta.ProxyID = proxyID
+	meta.Proxy = proxyURL
+	meta.Dir = dir
+	b, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return Meta{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, MetaFile), b, 0o600); err != nil {
+		return Meta{}, err
+	}
+	return meta, nil
+}
+
+// Delete removes an environment directory.
+func Delete(root, id string) error {
+	_, dir, ok := Find(root, id)
+	if !ok {
+		return fmt.Errorf("environment %q not found", id)
+	}
+	if !withinRoot(root, dir) {
+		return fmt.Errorf("refusing to delete %q outside %q", dir, root)
+	}
+	return os.RemoveAll(dir)
+}
+
+func withinRoot(root, dir string) bool {
+	cleanRoot := filepath.Clean(root)
+	cleanDir := filepath.Clean(dir)
+	if cleanDir == cleanRoot {
+		return false
+	}
+	return strings.HasPrefix(cleanDir+string(os.PathSeparator), cleanRoot+string(os.PathSeparator))
 }

@@ -121,3 +121,42 @@ func parseTimeout(raw json.RawMessage) (time.Duration, bool) {
 	}
 	return 0, false
 }
+
+// Write creates or replaces a script and its optional manifest.
+func Write(root, name, source string, manifest map[string]any) error {
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("invalid script name %q", name)
+	}
+	if strings.TrimSpace(source) == "" {
+		return fmt.Errorf("source is required")
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(root, name+".js"), []byte(source), 0o644); err != nil {
+		return err
+	}
+	manifestPath := filepath.Join(root, name+".json")
+	if manifest == nil {
+		_ = os.Remove(manifestPath)
+		return nil
+	}
+	b, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(manifestPath, b, 0o644)
+}
+
+// Delete removes a script and its manifest.
+func Delete(root, name string) error {
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("invalid script name %q", name)
+	}
+	jsPath := filepath.Join(root, name+".js")
+	if _, err := os.Stat(jsPath); err != nil {
+		return fmt.Errorf("script %q not found", name)
+	}
+	_ = os.Remove(filepath.Join(root, name+".json"))
+	return os.Remove(jsPath)
+}

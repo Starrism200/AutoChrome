@@ -106,11 +106,15 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Sess
 		platform = "default"
 	}
 	dir := filepath.Join(m.user.EnvRoot, envdir.Name(platform, envID))
+	meta, hasMeta := envdir.ReadMeta(dir)
 	fp := fingerprint.Generate(envID)
-	if meta, ok := envdir.ReadMeta(dir); ok && meta.Fingerprint.UserAgent != "" {
+	if hasMeta && meta.Fingerprint.UserAgent != "" {
 		fp = meta.Fingerprint
 	} else if _, err := envdir.Create(m.user.EnvRoot, platform, envID, fp); err != nil {
 		return nil, err
+	}
+	if proxy == "" && hasMeta {
+		proxy = meta.Proxy
 	}
 	if proxy == "" {
 		proxy = m.user.DefaultProxy
@@ -213,6 +217,21 @@ func (m *Manager) CloseAll() {
 		m.display = nil
 	}
 	m.mu.Unlock()
+}
+
+// CloseEnv closes every session opened for envID.
+func (m *Manager) CloseEnv(envID string) {
+	m.mu.Lock()
+	ids := []string{}
+	for id, s := range m.sessions {
+		if s.EnvID == envID {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		_ = m.Close(id)
+	}
 }
 
 // List returns session summaries sorted by creation time.

@@ -18,6 +18,8 @@
 - 内置同步 JavaScript SDK（`ac` / `page`），无需 Node.js
 - stdio MCP 服务器，提供浏览器工具与资源
 - HTTP/JSON API（`autochrome serve`），Bearer Token 认证
+- 代理管理、按实例绑定代理、代理连通性检测
+- 短期交互页面，用于扫码 / 验证码 / 打码人工接管
 - VNC/noVNC 远程桌面，支持真人接管（扫码、短信验证码、打码）
 - 二维码/OTP/验证码检测、二维码截图与坐标点击
 - 多用户隔离（L2：每用户一个 MCP 进程和独立目录树）
@@ -152,7 +154,9 @@ return { title, nodes: snap.nodes.length };
 ```
 
 服务使用用户级 token，存放在 `data/users/alice/api_token`，在 `/api/v1` 下提供
-环境、会话、导航、快照、截图、验证码检测、脚本和 VNC 信息。
+环境、会话、导航、快照、截图、验证码检测、脚本、代理和 VNC 信息。还支持代理
+增删改查/检测、按环境绑定代理，以及 `GET /api/v1/sessions/{id}/interaction`
+生成的短期交互页面。
 
 ```bash
 TOKEN=$(cat data/users/alice/api_token)
