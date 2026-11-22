@@ -151,6 +151,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/envs", s.handleEnvList)
 	mux.HandleFunc("POST /api/v1/envs", s.handleEnvCreate)
 	mux.HandleFunc("GET /api/v1/envs/{id}", s.handleEnvGet)
+	mux.HandleFunc("PATCH /api/v1/envs/{id}", s.handleEnvUpdate)
+	mux.HandleFunc("PUT /api/v1/envs/{id}", s.handleEnvUpdate)
 	mux.HandleFunc("DELETE /api/v1/envs/{id}", s.handleEnvDelete)
 	mux.HandleFunc("PUT /api/v1/envs/{id}/proxy", s.handleEnvBindProxy)
 	mux.HandleFunc("DELETE /api/v1/envs/{id}/proxy", s.handleEnvUnbindProxy)
@@ -158,6 +160,19 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/envs/{id}/chrome", s.handleEnvChromeUnbind)
 	mux.HandleFunc("GET /api/v1/envs/{id}/export", s.handleEnvExport)
 	mux.HandleFunc("POST /api/v1/envs/import", s.handleEnvImport)
+
+	mux.HandleFunc("GET /api/v1/containers", s.handleEnvList)
+	mux.HandleFunc("POST /api/v1/containers", s.handleEnvCreate)
+	mux.HandleFunc("POST /api/v1/containers/import", s.handleEnvImport)
+	mux.HandleFunc("GET /api/v1/containers/{name}", s.containerAlias(s.handleEnvGet))
+	mux.HandleFunc("PATCH /api/v1/containers/{name}", s.containerAlias(s.handleEnvUpdate))
+	mux.HandleFunc("PUT /api/v1/containers/{name}", s.containerAlias(s.handleEnvUpdate))
+	mux.HandleFunc("DELETE /api/v1/containers/{name}", s.containerAlias(s.handleEnvDelete))
+	mux.HandleFunc("GET /api/v1/containers/{name}/export", s.containerAlias(s.handleEnvExport))
+	mux.HandleFunc("PUT /api/v1/containers/{name}/proxy", s.containerAlias(s.handleEnvBindProxy))
+	mux.HandleFunc("DELETE /api/v1/containers/{name}/proxy", s.containerAlias(s.handleEnvUnbindProxy))
+	mux.HandleFunc("PUT /api/v1/containers/{name}/chrome", s.containerAlias(s.handleEnvChrome))
+	mux.HandleFunc("DELETE /api/v1/containers/{name}/chrome", s.containerAlias(s.handleEnvChromeUnbind))
 
 	mux.HandleFunc("GET /api/v1/proxies", s.handleProxyList)
 	mux.HandleFunc("POST /api/v1/proxies", s.handleProxyAdd)
@@ -338,6 +353,23 @@ func (s *Server) listEnvs() []envdir.Meta {
 	return out
 }
 
+func (s *Server) findEnvByName(name string) (envdir.Meta, string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return envdir.Meta{}, "", false
+	}
+	for _, m := range s.listEnvs() {
+		if m.Name == name || m.ID == name {
+			dir := m.Dir
+			if dir == "" {
+				dir = filepath.Join(s.User.EnvRoot, envdir.Name(m.Platform, m.ID))
+			}
+			return m, dir, true
+		}
+	}
+	return envdir.Meta{}, "", false
+}
+
 func (s *Server) findEnv(id string) (envdir.Meta, string, bool) {
 	if m, ok := s.Registry.Get(id); ok {
 		dir := m.Dir
@@ -349,18 +381,21 @@ func (s *Server) findEnv(id string) (envdir.Meta, string, bool) {
 		}
 		_ = s.Registry.Delete(id)
 	}
-	m, dir, ok := envdir.Find(s.User.EnvRoot, id)
-	if ok {
+	if m, dir, ok := envdir.Find(s.User.EnvRoot, id); ok {
 		_ = s.Registry.Put(m)
+		return m, dir, true
 	}
-	return m, dir, ok
+	return s.findEnvByName(id)
 }
 
 func (s *Server) handleEnvCreate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ID            string `json:"id"`
-		Platform      string `json:"platform"`
-		ChromeVersion string `json:"chrome_version"`
+		ID            string   `json:"id"`
+		Name          string   `json:"name"`
+		Description   string   `json:"description"`
+		Tags          []string `json:"tags"`
+		Platform      string   `json:"platform"`
+		ChromeVersion string   `json:"chrome_version"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -377,7 +412,14 @@ func (s *Server) handleEnvCreate(w http.ResponseWriter, r *http.Request) {
 		in.Platform = "default"
 	}
 	if _, _, ok := s.findEnv(in.ID); ok {
-		writeError(w, http.StatusConflict, "env_exists", fmt.Sprintf("environment %q already exists", in.ID))
+		writeError(w, http.StatusConflict, "env_exists", fmt.Sprintf("container %q already exists", in.ID))
+		return
+	}
+	if in.Name == "" {
+		in.Name = in.ID
+	}
+	if _, _, ok := s.findEnvByName(in.Name); ok {
+		writeError(w, http.StatusConflict, "env_name_exists", fmt.Sprintf("container name %q already exists", in.Name))
 		return
 	}
 	fp := fingerprint.Generate(in.ID)
@@ -387,10 +429,16 @@ func (s *Server) handleEnvCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	meta, _ := envdir.ReadMeta(dir)
+	meta.Name = in.Name
+	meta.Description = in.Description
+	meta.Tags = in.Tags
 	if in.ChromeVersion != "" {
-		if updated, err := envdir.SetChromeDir(dir, meta, in.ChromeVersion); err == nil {
-			meta = updated
-		}
+		meta.ChromeVersion = in.ChromeVersion
+	}
+	meta.UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := envdir.WriteMeta(dir, meta); err != nil {
+		writeError(w, http.StatusInternalServerError, "env_create_failed", err.Error())
+		return
 	}
 	_ = s.Registry.Put(meta)
 	writeJSON(w, http.StatusCreated, map[string]any{"dir": dir, "fingerprint": fp, "env": meta})
@@ -1090,6 +1138,58 @@ func (s *Server) handleEnvGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meta)
+}
+
+func (s *Server) handleEnvUpdate(w http.ResponseWriter, r *http.Request) {
+	meta, dir, ok := s.findEnv(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	var in struct {
+		Name        *string   `json:"name"`
+		Description *string   `json:"description"`
+		Tags        *[]string `json:"tags"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.Name != nil {
+		name := strings.TrimSpace(*in.Name)
+		if name != "" {
+			if existing, _, ok := s.findEnvByName(name); ok && existing.ID != meta.ID {
+				writeError(w, http.StatusConflict, "env_name_exists", fmt.Sprintf("container name %q already exists", name))
+				return
+			}
+		}
+		meta.Name = name
+	}
+	if in.Description != nil {
+		meta.Description = *in.Description
+	}
+	if in.Tags != nil {
+		meta.Tags = *in.Tags
+	}
+	meta.UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := envdir.WriteMeta(dir, meta); err != nil {
+		writeError(w, http.StatusInternalServerError, "env_update_failed", err.Error())
+		return
+	}
+	_ = s.Registry.Put(meta)
+	s.publish("env.updated", meta)
+	writeJSON(w, http.StatusOK, meta)
+}
+
+func (s *Server) containerAlias(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if meta, _, ok := s.findEnvByName(name); ok {
+			r.SetPathValue("id", meta.ID)
+		} else {
+			r.SetPathValue("id", name)
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) handleEnvDelete(w http.ResponseWriter, r *http.Request) {

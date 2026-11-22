@@ -12,7 +12,8 @@ English | [简体中文](README.zh-CN.md)
 
 - Install Google Chrome, Xvfb and fonts (`install.sh`)
 - Update Chrome/system packages and rebuild (`update.sh`)
-- Create self-contained browser environment directories (`env.json` + Chrome profile)
+- Containers/environments with unique name + id and an isolated directory
+- Create, update, inspect, delete, import and export containers
 - Generate a deterministic fingerprint per environment (UA, UA-CH, timezone,
   locale, screen, WebGL, CPU and memory)
 - Launch headed Chrome through `xvfb-run` when no display is available
@@ -38,8 +39,8 @@ English | [简体中文](README.zh-CN.md)
 ## Architecture
 
 One Chrome installation (the system Chrome or a managed version) is shared.
-Every environment has its own persistent profile; each live session runs a
-separate Chrome process. Users are isolated by process and directory (L2), not
+Every container (environment) has a unique name/id and its own directory; each
+live session runs a separate Chrome process. Users are isolated by process and directory (L2), not
 by OS users or containers.
 
 ## Requirements
@@ -175,7 +176,7 @@ See [docs/MCP.md](docs/MCP.md).
 ```
 
 The server uses a per-user token stored at `data/users/alice/api_token` and
-exposes environments, sessions, navigation, snapshots, screenshots, challenges,
+exposes containers/environments, sessions, navigation, snapshots, screenshots, challenges,
 scripts, proxies and VNC information under `/api/v1`. It also supports proxy
 CRUD/checks, per-environment proxy binding, storage roots, attachments,
 environment export/import, cookie+UA export/import, Chrome version management,

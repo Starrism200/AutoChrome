@@ -10,7 +10,8 @@
 
 - 一键安装 Google Chrome、Xvfb、字体等系统依赖（`install.sh`）
 - 一键升级 Chrome / 系统依赖并重新编译（`update.sh`）
-- 为每个环境生成独立、可归档的浏览器目录（`env.json` + Chrome profile）
+- 容器/环境有唯一 name/id 和独立目录
+- 支持容器新增、修改、查询、删除、导入、导出
 - 基于种子确定性生成浏览器指纹（UA、UA-CH、时区、语言、屏幕、WebGL、CPU/内存）
 - 在没有物理显示器时自动用 `xvfb-run` 启动有头 Chrome
 - 支持按环境绑定代理
@@ -34,8 +35,8 @@
 
 ## 架构
 
-Chrome 二进制是共享的（系统 Chrome 或托管版本）；每个环境有独立的持久化
-profile，每个存活会话是一个独立的 Chrome 进程。用户层面是 L2 隔离：
+Chrome 二进制是共享的（系统 Chrome 或托管版本）；每个容器（环境）有唯一的
+name/id 和独立目录，每个存活会话是一个独立的 Chrome 进程。用户层面是 L2 隔离：
 独立进程 + 独立目录，不是 OS 用户或容器隔离。
 
 ## 依赖
@@ -168,7 +169,7 @@ return { title, nodes: snap.nodes.length };
 ```
 
 服务使用用户级 token，存放在 `data/users/alice/api_token`，在 `/api/v1` 下提供
-环境、会话、导航、快照、截图、验证码检测、脚本、代理和 VNC 信息。还支持代理
+容器/环境、会话、导航、快照、截图、验证码检测、脚本、代理和 VNC 信息。还支持代理
 增删改查/检测、按环境绑定代理，以及 `GET /api/v1/sessions/{id}/interaction`
 生成的短期交互页面；以及存储路径、附件上传下载、环境打包导入导出、
 Cookie+UA 导入导出、Chrome 多版本管理、SSE 事件流、批量打开、token 轮换、

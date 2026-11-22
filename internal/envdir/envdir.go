@@ -22,9 +22,13 @@ const MetaFile = "env.json"
 
 type Meta struct {
 	ID            string              `json:"id"`
+	Name          string              `json:"name,omitempty"`
+	Description   string              `json:"description,omitempty"`
+	Tags          []string            `json:"tags,omitempty"`
 	Platform      string              `json:"platform"`
 	Dir           string              `json:"dir"`
 	CreatedAt     string              `json:"created_at"`
+	UpdatedAt     string              `json:"updated_at,omitempty"`
 	ProxyID       string              `json:"proxy_id,omitempty"`
 	Proxy         string              `json:"proxy,omitempty"`
 	ChromeVersion string              `json:"chrome_version,omitempty"`
@@ -85,6 +89,9 @@ func CreateAt(dir, platform, id string, fp fingerprint.Profile) (Meta, error) {
 	}
 	return meta, nil
 }
+
+// WriteMeta writes an environment metadata file.
+func WriteMeta(dir string, meta Meta) error { return writeMeta(dir, meta) }
 
 func writeMeta(dir string, meta Meta) error {
 	meta.Dir = dir

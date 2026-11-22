@@ -299,3 +299,45 @@ func TestEventsStream(t *testing.T) {
 		}
 	}
 }
+
+func TestContainerNameAndUpdate(t *testing.T) {
+	_, ts := newTestAPI(t)
+	resp, data := request(t, ts, http.MethodPost, "/api/v1/containers", "test-token", map[string]any{
+		"id": "c1", "name": "alpha", "description": "first",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create container = %d %s", resp.StatusCode, data)
+	}
+	resp, data = request(t, ts, http.MethodGet, "/api/v1/containers/alpha", "test-token", nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(data), `"name":"alpha"`) {
+		t.Fatalf("get container = %d %s", resp.StatusCode, data)
+	}
+	resp, data = request(t, ts, http.MethodPatch, "/api/v1/containers/alpha", "test-token", map[string]any{
+		"name": "beta", "description": "updated",
+	})
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(data), `"name":"beta"`) {
+		t.Fatalf("update container = %d %s", resp.StatusCode, data)
+	}
+	resp, data = request(t, ts, http.MethodGet, "/api/v1/containers/beta", "test-token", nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(data), `"description":"updated"`) {
+		t.Fatalf("get renamed container = %d %s", resp.StatusCode, data)
+	}
+	resp, _ = request(t, ts, http.MethodGet, "/api/v1/containers/alpha", "test-token", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("old name = %d", resp.StatusCode)
+	}
+	resp, _ = request(t, ts, http.MethodPost, "/api/v1/containers", "test-token", map[string]any{
+		"id": "c2", "name": "beta",
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate name = %d", resp.StatusCode)
+	}
+	resp, data = request(t, ts, http.MethodGet, "/api/v1/containers/beta", "test-token", nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(data), `"id":"c1"`) {
+		t.Fatalf("get by name = %d %s", resp.StatusCode, data)
+	}
+	resp, _ = request(t, ts, http.MethodDelete, "/api/v1/containers/beta", "test-token", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete container = %d", resp.StatusCode)
+	}
+}

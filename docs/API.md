@@ -95,9 +95,34 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | GET | `/api/v1/envs` | 环境列表 |
 | POST | `/api/v1/envs` | 创建环境 `{id, platform?}` |
 | GET | `/api/v1/envs/{id}` | 环境详情 |
+| PATCH | `/api/v1/envs/{id}` | 修改容器 `{name?, description?, tags?}` |
+| PUT | `/api/v1/envs/{id}` | 同 PATCH |
 | DELETE | `/api/v1/envs/{id}` | 删除环境（会先关闭该环境的会话） |
 | PUT | `/api/v1/envs/{id}/proxy` | 绑定代理 `{proxy_id}` |
 | DELETE | `/api/v1/envs/{id}/proxy` | 解绑代理 |
+
+### 容器别名
+
+“容器”就是环境实例，每个容器有唯一 `id`/`name` 和独立 `dir`。以下接口
+`{name}` 可以传唯一名字或 id：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/containers` | 容器列表 |
+| POST | `/api/v1/containers` | 新增容器 `{id, name?, description?, tags?, platform?, chrome_version?}` |
+| GET | `/api/v1/containers/{name}` | 查询容器 |
+| PATCH | `/api/v1/containers/{name}` | 修改容器 |
+| PUT | `/api/v1/containers/{name}` | 同 PATCH |
+| DELETE | `/api/v1/containers/{name}` | 删除容器 |
+| GET | `/api/v1/containers/{name}/export` | 导出容器 |
+| POST | `/api/v1/containers/import` | 导入容器 |
+| PUT | `/api/v1/containers/{name}/proxy` | 绑定代理 |
+| DELETE | `/api/v1/containers/{name}/proxy` | 解绑代理 |
+| PUT | `/api/v1/containers/{name}/chrome` | 绑定 Chrome 版本 |
+| DELETE | `/api/v1/containers/{name}/chrome` | 解绑 Chrome 版本 |
+
+`id` 创建后不可变；`name` 可修改且在同一用户下唯一。目录名由 `id` 决定，
+每个容器独立，不会因为改名而移动目录。
 
 ### 环境打包
 

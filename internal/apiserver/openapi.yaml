@@ -56,6 +56,11 @@ paths:
               required: [id]
               properties:
                 id: { type: string }
+                name: { type: string, description: unique container name }
+                description: { type: string }
+                tags:
+                  type: array
+                  items: { type: string }
                 platform: { type: string }
                 chrome_version: { type: string }
       responses:
@@ -137,6 +142,107 @@ paths:
                 file: { type: string, format: binary }
       responses:
         "201": { description: Imported }
+  /containers:
+    get:
+      summary: List containers (alias of environments)
+      responses:
+        "200": { description: Containers }
+    post:
+      summary: Create container
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+                name: { type: string }
+                description: { type: string }
+                tags:
+                  type: array
+                  items: { type: string }
+                platform: { type: string }
+                chrome_version: { type: string }
+      responses:
+        "201": { description: Created }
+  /containers/import:
+    post:
+      summary: Import container archive
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: Imported }
+  /containers/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get container by name or id
+      responses:
+        "200": { description: Container }
+    patch:
+      summary: Update container name/description/tags
+      responses:
+        "200": { description: Container }
+    put:
+      summary: Update container name/description/tags
+      responses:
+        "200": { description: Container }
+    delete:
+      summary: Delete container
+      responses:
+        "200": { description: Deleted }
+  /containers/{name}/export:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Export container as tar.gz
+      responses:
+        "200":
+          description: gzip archive
+          content:
+            application/gzip: {}
+  /containers/{name}/proxy:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      summary: Bind proxy to container
+      responses:
+        "200": { description: Container }
+    delete:
+      summary: Unbind proxy from container
+      responses:
+        "200": { description: Container }
+  /containers/{name}/chrome:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      summary: Bind Chrome version to container
+      responses:
+        "200": { description: Container }
+    delete:
+      summary: Unbind Chrome version from container
+      responses:
+        "200": { description: Container }
   /proxies:
     get:
       summary: List proxies
