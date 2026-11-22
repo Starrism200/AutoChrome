@@ -34,6 +34,6 @@ xvfb_run() {
   if [ -n "${DISPLAY:-}" ]; then
     "$@"
   else
-    xvfb-run -a -s "-screen 0 1366x900x24" "$@"
+    xvfb-run -a -s "-screen 0 1920x1080x24" "$@"
   fi
 }

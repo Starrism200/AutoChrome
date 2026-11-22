@@ -141,8 +141,9 @@ curl -X PUT -H "$H" -H 'Content-Type: application/json' \
   "$BASE/containers/demo/size"
 ```
 
-这只改变该容器的 Chrome 视口/窗口大小；**noVNC 画布大小仍是该用户进程的
-Xvfb 屏幕**，当前不是每容器独立画布。
+默认浏览器视口是 `1366x900`，可设置为 `1920x1080`。**noVNC 画布大小仍是
+该用户进程的 Xvfb 屏幕**，默认 `1920x1080`，启动时可用
+`--vnc-screen 1366x900x24` 覆盖；当前不是每容器独立画布。
 
 ### 环境打包
 

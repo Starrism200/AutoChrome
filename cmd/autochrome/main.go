@@ -32,7 +32,7 @@ import (
 	"autochrome/internal/users"
 )
 
-const screen = "1366x900x24"
+const screen = "1920x1080x24"
 
 func main() {
 	log.SetFlags(log.LstdFlags)
@@ -173,6 +173,7 @@ func cmdOpen(args []string) {
 	vncPassword := fs.String("vnc-password", "", "optional VNC password (also $AUTOCHROME_VNC_PASSWORD)")
 	vncStart := fs.Int("vnc-port-start", 0, "override first port for auto-assigned VNC/noVNC ports")
 	vncEnd := fs.Int("vnc-port-end", 0, "override last port for auto-assigned VNC/noVNC ports")
+	vncScreen := fs.String("vnc-screen", screen, "VNC Xvfb screen, e.g. 1920x1080x24 or 1366x900x24")
 	_ = fs.Parse(args)
 
 	if *id == "" {
@@ -187,7 +188,7 @@ func cmdOpen(args []string) {
 	}
 	var displayEnv []string
 	if *vnc {
-		d, err := startDesktop(u, *vncPassword, *vncStart, *vncEnd)
+		d, err := startDesktop(u, *vncPassword, *vncStart, *vncEnd, *vncScreen)
 		if err != nil {
 			log.Fatalf("vnc: %v", err)
 		}
@@ -506,6 +507,7 @@ func cmdMCP(args []string) {
 	vncPassword := fs.String("vnc-password", "", "optional VNC password (also $AUTOCHROME_VNC_PASSWORD)")
 	vncStart := fs.Int("vnc-port-start", 0, "override first port for auto-assigned VNC/noVNC ports")
 	vncEnd := fs.Int("vnc-port-end", 0, "override last port for auto-assigned VNC/noVNC ports")
+	vncScreen := fs.String("vnc-screen", screen, "VNC Xvfb screen, e.g. 1920x1080x24 or 1366x900x24")
 	_ = fs.Parse(args)
 
 	u, err := users.Resolve(*userID)
@@ -523,7 +525,7 @@ func cmdMCP(args []string) {
 	}
 
 	if *vnc {
-		d, err := startDesktop(u, *vncPassword, *vncStart, *vncEnd)
+		d, err := startDesktop(u, *vncPassword, *vncStart, *vncEnd, *vncScreen)
 		if err != nil {
 			log.Fatalf("vnc: %v", err)
 		}
@@ -545,13 +547,14 @@ func cmdDesktop(args []string) {
 	password := fs.String("vnc-password", "", "optional VNC password (also $AUTOCHROME_VNC_PASSWORD)")
 	portStart := fs.Int("port-start", 0, "override first port for auto-assigned VNC/noVNC ports")
 	portEnd := fs.Int("port-end", 0, "override last port for auto-assigned VNC/noVNC ports")
+	vncScreen := fs.String("vnc-screen", screen, "VNC Xvfb screen, e.g. 1920x1080x24 or 1366x900x24")
 	_ = fs.Parse(args)
 
 	u, err := users.Resolve(*userID)
 	if err != nil {
 		log.Fatal(err)
 	}
-	d, err := startDesktop(u, *password, *portStart, *portEnd)
+	d, err := startDesktop(u, *password, *portStart, *portEnd, *vncScreen)
 	if err != nil {
 		log.Fatalf("desktop: %v", err)
 	}
@@ -577,6 +580,7 @@ func cmdServe(args []string) {
 	vncPassword := fs.String("vnc-password", "", "optional VNC password (also $AUTOCHROME_VNC_PASSWORD)")
 	vncStart := fs.Int("vnc-port-start", 0, "override first port for auto-assigned VNC/noVNC ports")
 	vncEnd := fs.Int("vnc-port-end", 0, "override last port for auto-assigned VNC/noVNC ports")
+	vncScreen := fs.String("vnc-screen", screen, "VNC Xvfb screen, e.g. 1920x1080x24 or 1366x900x24")
 	_ = fs.Parse(args)
 
 	u, err := users.Resolve(*userID)
@@ -612,7 +616,7 @@ func cmdServe(args []string) {
 	srv.Token = apiToken
 
 	if *vnc {
-		d, err := startDesktop(u, *vncPassword, *vncStart, *vncEnd)
+		d, err := startDesktop(u, *vncPassword, *vncStart, *vncEnd, *vncScreen)
 		if err != nil {
 			log.Fatalf("vnc: %v", err)
 		}
@@ -641,7 +645,7 @@ func cmdServe(args []string) {
 	}
 }
 
-func startDesktop(u users.User, password string, portStart, portEnd int) (*desktop.Desktop, error) {
+func startDesktop(u users.User, password string, portStart, portEnd int, screenSpec string) (*desktop.Desktop, error) {
 	if password == "" {
 		password = os.Getenv("AUTOCHROME_VNC_PASSWORD")
 	}
@@ -658,9 +662,12 @@ func startDesktop(u users.User, password string, portStart, portEnd int) (*deskt
 	if end > 0 {
 		u.VNCPortEnd = end
 	}
+	if screenSpec == "" {
+		screenSpec = screen
+	}
 	stateDir := filepath.Join(u.Home, "data", "users", u.ID)
 	return desktop.Start(desktop.Config{
-		Screen:    screen,
+		Screen:    screenSpec,
 		PortStart: start,
 		PortEnd:   end,
 		Password:  password,

@@ -83,7 +83,7 @@ var screens = []struct {
 	w, h  int
 	ratio float64
 }{
-	{1366, 768, 1},
+	{1366, 900, 1},
 	{1440, 900, 1},
 	{1536, 864, 1.25},
 	{1600, 900, 1},
@@ -109,7 +109,7 @@ func Generate(seed string) Profile {
 	}
 	o := osProfiles[next(len(osProfiles))]
 	l := locales[next(len(locales))]
-	s := screens[next(len(screens))]
+	s := screens[0]
 	return Profile{
 		UserAgent:           o.UserAgent,
 		Platform:            o.Platform,

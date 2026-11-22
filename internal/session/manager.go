@@ -120,7 +120,7 @@ func (m *Manager) Display() (*xvfb.Display, error) {
 	if m.display != nil {
 		return m.display, nil
 	}
-	d, err := xvfb.Start("1366x900x24")
+	d, err := xvfb.Start("1920x1080x24")
 	if err != nil {
 		return nil, err
 	}

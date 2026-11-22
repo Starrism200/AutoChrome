@@ -24,7 +24,7 @@ cmd/autochrome
 `autochrome open` 启动时：
 
 1. 如果 `DISPLAY` 已存在，直接在当前显示上运行
-2. 否则用 `xvfb-run -a -s "-screen 0 1366x900x24"` 重新执行自己
+2. 否则用 `xvfb-run -a -s "-screen 0 1920x1080x24"` 重新执行自己
 3. `xvfb-run` 为子进程导出 `DISPLAY`，子进程不再递归
 
 这样做的原因：纯 `--headless` 的浏览器特征与真实有头浏览器不同，部分站点更

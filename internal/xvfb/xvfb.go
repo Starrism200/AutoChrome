@@ -21,7 +21,7 @@ type Display struct {
 // as-is. Otherwise a free display number between :99 and :198 is started.
 func Start(screen string) (*Display, error) {
 	if screen == "" {
-		screen = "1366x900x24"
+		screen = "1920x1080x24"
 	}
 	if name := os.Getenv("DISPLAY"); name != "" {
 		return &Display{Name: name}, nil

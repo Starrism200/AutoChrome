@@ -60,7 +60,7 @@ type Desktop struct {
 // Start launches x11vnc on the display and serves noVNC through websockify.
 func Start(cfg Config) (*Desktop, error) {
 	if cfg.Screen == "" {
-		cfg.Screen = "1366x900x24"
+		cfg.Screen = "1920x1080x24"
 	}
 	if cfg.PortStart <= 0 {
 		cfg.PortStart = DefaultPortStart
