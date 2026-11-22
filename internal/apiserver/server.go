@@ -33,7 +33,9 @@ import (
 	"autochrome/internal/envdir"
 	"autochrome/internal/filelock"
 	"autochrome/internal/fingerprint"
+	"autochrome/internal/jobs"
 	"autochrome/internal/jsruntime"
+	"autochrome/internal/mcpserver"
 	"autochrome/internal/proxy"
 	"autochrome/internal/scheduler"
 	"autochrome/internal/scripts"
@@ -61,6 +63,10 @@ type Server struct {
 	Registry     *envdir.Registry
 	Attachments  *attachments.Store
 	Schedules    *scheduler.Store
+	Jobs         *jobs.Manager
+
+	EnableMCP  bool
+	MCPHandler http.Handler
 
 	interMu      sync.Mutex
 	interactions map[string]*interaction
@@ -102,6 +108,18 @@ func (s *Server) Run(ctx context.Context) error {
 		s.Manager.SetDisplay(s.Desktop.Display())
 	}
 	defer s.Manager.CloseAll()
+	s.Jobs = jobs.New(s.User, s.Manager, s.AllowEval, s.publish)
+	defer s.Jobs.Close()
+	if s.EnableMCP {
+		mcpSrv := mcpserver.New(s.User, s.ChromePath)
+		mcpSrv.Manager = s.Manager
+		mcpSrv.Desktop = s.Desktop
+		mcpSrv.Jobs = s.Jobs
+		mcpSrv.AllowEval = s.AllowEval
+		mcpSrv.AllowScripts = s.AllowScripts
+		mcpSrv.Build()
+		s.MCPHandler = mcpSrv.Handler()
+	}
 	go s.monitorVNCTokens(ctx)
 	go s.runScheduler(ctx)
 
@@ -223,6 +241,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/scripts/{name}", s.handleScriptWrite)
 	mux.HandleFunc("DELETE /api/v1/scripts/{name}", s.handleScriptDelete)
 	mux.HandleFunc("POST /api/v1/scripts/{name}/run", s.handleScriptRun)
+	mux.HandleFunc("POST /api/v1/scripts/{name}/jobs", s.handleScriptJobStart)
+
+	mux.HandleFunc("GET /api/v1/jobs", s.handleJobList)
+	mux.HandleFunc("GET /api/v1/jobs/{id}", s.handleJobGet)
+	mux.HandleFunc("GET /api/v1/jobs/{id}/logs", s.handleJobLogs)
+	mux.HandleFunc("DELETE /api/v1/jobs/{id}", s.handleJobCancel)
 
 	mux.HandleFunc("GET /api/v1/attachments", s.handleAttachmentList)
 	mux.HandleFunc("POST /api/v1/attachments", s.handleAttachmentAdd)
@@ -244,6 +268,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /vnc/{token}", s.handleVNC)
 	mux.HandleFunc("GET /vnc/{token}/{path...}", s.handleVNC)
+
+	if s.MCPHandler != nil {
+		mux.Handle("/mcp", s.MCPHandler)
+	}
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {

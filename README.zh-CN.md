@@ -25,6 +25,8 @@
 - Chrome 多版本管理（安装/切换/更新/删除）
 - API 代理 noVNC 公网 token，300 秒无动作断开
 - SSE 事件流、批量打开会话、token 轮换、定时任务
+- 远程 MCP（Streamable HTTP，`serve --mcp`）
+- 异步脚本任务，带持久化日志和取消
 - OpenAPI 文档：`/api/v1/openapi.yaml`
 - Cookie + User-Agent 导入导出
 - 短期交互页面，用于扫码 / 验证码 / 打码人工接管
@@ -175,6 +177,24 @@ return { title, nodes: snap.nodes.length };
 Cookie+UA 导入导出、Chrome 多版本管理、SSE 事件流、批量打开、token 轮换、
 间隔定时任务和短期交互页面。OpenAPI：`GET /api/v1/openapi.yaml`。
 
+`serve --mcp` 在同一端口挂载 MCP Streamable HTTP：
+
+```bash
+./bin/autochrome serve -user alice --mcp --addr 0.0.0.0:8787
+# MCP endpoint: http://serverA:8787/mcp
+```
+
+长脚本走异步任务：
+
+```bash
+POST /api/v1/scripts/{name}/jobs
+GET  /api/v1/jobs/{id}
+GET  /api/v1/jobs/{id}/logs
+DELETE /api/v1/jobs/{id}
+```
+
+详见 [docs/REMOTE.md](docs/REMOTE.md)。
+
 ```bash
 TOKEN=$(cat data/users/alice/api_token)
 curl -H "Authorization: Bearer $TOKEN" \
@@ -225,6 +245,7 @@ internal/mcpserver/    MCP stdio 服务器
 internal/apiserver/    HTTP/JSON API 服务器
 internal/chrome/       Chrome 多版本管理
 internal/scheduler/    间隔定时任务
+internal/jobs/         异步脚本任务与日志
 internal/filelock/     跨进程索引锁
 internal/atomicfile/   原子文件写入
 internal/xvfb/         共享虚拟显示器
@@ -247,3 +268,4 @@ docs/                  安装、浏览器、SDK、MCP 与多用户文档
 - [docs/VNC.md](docs/VNC.md)：x11vnc + noVNC、端口与安全
 - [docs/INTERACTION.md](docs/INTERACTION.md)：扫码、验证码、打码的人工接力
 - [docs/API.md](docs/API.md)：HTTP/JSON API、认证与示例
+- [docs/REMOTE.md](docs/REMOTE.md)：远程 REST + MCP、脚本任务与部署

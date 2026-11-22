@@ -15,6 +15,7 @@
 --token TOKEN          # 指定 token（也可用 AUTOCHROME_API_TOKEN）
 --cors http://localhost:3000
 --vnc                  # 同时启动 x11vnc + noVNC
+--mcp                  # 在同一端口挂载 MCP Streamable HTTP /mcp
 --allow-eval           # 强制开启 /eval
 --allow-scripts        # 强制开启脚本运行
 ```
@@ -271,6 +272,22 @@ UA 通过 CDP `Emulation.setUserAgentOverride` 设置，属于字符串级覆盖
 | PUT | `/api/v1/scripts/{name}` | 新增/替换 `{source, description?, timeout?, inputSchema?}` |
 | DELETE | `/api/v1/scripts/{name}` | 删除脚本 |
 | POST | `/api/v1/scripts/{name}/run` | `{input?, session_id?}`，需 `allow_scripts` |
+
+### 异步脚本任务
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/v1/scripts/{name}/jobs` | 启动异步任务 `{input?, session_id?}` |
+| GET | `/api/v1/jobs` | 任务列表 |
+| GET | `/api/v1/jobs/{id}` | 状态、结果、错误 |
+| GET | `/api/v1/jobs/{id}/logs` | 纯文本日志 |
+| DELETE | `/api/v1/jobs/{id}` | 取消任务 |
+
+- 每用户默认并发 10，可用 `AUTOCHROME_JOB_CONCURRENCY` 覆盖
+- 元数据在 `data/users/<id>/jobs.json`
+- 日志在 `data/logs/jobs/<job_id>.log`
+- 默认保留 7 天；进程重启时未完成任务标记为 `interrupted`
+- MCP 客户端使用 `script_job_start/status/logs/cancel/list`
 
 ### VNC
 

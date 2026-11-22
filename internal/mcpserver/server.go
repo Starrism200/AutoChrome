@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
 	"autochrome/internal/fingerprint"
+	"autochrome/internal/jobs"
 	"autochrome/internal/jsruntime"
 	"autochrome/internal/scripts"
 	"autochrome/internal/session"
@@ -36,6 +38,8 @@ type Server struct {
 	Manager      *session.Manager
 	Desktop      *desktop.Desktop
 	Registry     *envdir.Registry
+	Jobs         *jobs.Manager
+	mcpServer    *mcp.Server
 }
 
 // New returns a server for user.
@@ -49,20 +53,41 @@ func New(u users.User, chrome string) *Server {
 	}
 }
 
-// Run starts the stdio MCP server and blocks until the client disconnects.
-func (s *Server) Run(ctx context.Context) error {
-	s.Manager = session.NewManager(s.User, s.Chrome)
-	if s.Desktop != nil {
-		s.Manager.SetDisplay(s.Desktop.Display())
+// Build creates (once) the MCP server with all tools and resources.
+func (s *Server) Build() *mcp.Server {
+	if s.mcpServer != nil {
+		return s.mcpServer
 	}
-	defer s.Manager.CloseAll()
-
 	srv := mcp.NewServer(
 		&mcp.Implementation{Name: "autochrome", Title: "AutoChrome", Version: Version},
 		&mcp.ServerOptions{Instructions: instructions},
 	)
 	s.register(srv)
-	return srv.Run(ctx, &mcp.StdioTransport{})
+	s.mcpServer = srv
+	return srv
+}
+
+// Handler returns the Streamable HTTP handler for remote MCP clients.
+func (s *Server) Handler() http.Handler {
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		return s.Build()
+	}, &mcp.StreamableHTTPOptions{})
+}
+
+// Run starts the stdio MCP server and blocks until the client disconnects.
+func (s *Server) Run(ctx context.Context) error {
+	if s.Manager == nil {
+		s.Manager = session.NewManager(s.User, s.Chrome)
+		if s.Desktop != nil {
+			s.Manager.SetDisplay(s.Desktop.Display())
+		}
+		defer s.Manager.CloseAll()
+	}
+	if s.Jobs == nil {
+		s.Jobs = jobs.New(s.User, s.Manager, s.AllowEval, nil)
+		defer s.Jobs.Close()
+	}
+	return s.Build().Run(ctx, &mcp.StdioTransport{})
 }
 
 const instructions = `AutoChrome drives Google Chrome on a virtual display with persistent, per-environment profiles.
@@ -108,7 +133,12 @@ func (s *Server) register(srv *mcp.Server) {
 	}
 	if s.AllowScripts {
 		mcp.AddTool(srv, &mcp.Tool{Name: "script_list", Description: "List reusable JavaScript scripts for this user."}, s.scriptList)
-		mcp.AddTool(srv, &mcp.Tool{Name: "script_run", Description: "Run a reusable JavaScript script with JSON input."}, s.scriptRun)
+		mcp.AddTool(srv, &mcp.Tool{Name: "script_run", Description: "Run a reusable JavaScript script synchronously."}, s.scriptRun)
+		mcp.AddTool(srv, &mcp.Tool{Name: "script_job_start", Description: "Start an asynchronous script job and return a job id."}, s.scriptJobStart)
+		mcp.AddTool(srv, &mcp.Tool{Name: "script_job_status", Description: "Get an asynchronous script job status and result."}, s.scriptJobStatus)
+		mcp.AddTool(srv, &mcp.Tool{Name: "script_job_logs", Description: "Read an asynchronous script job log."}, s.scriptJobLogs)
+		mcp.AddTool(srv, &mcp.Tool{Name: "script_job_cancel", Description: "Cancel an asynchronous script job."}, s.scriptJobCancel)
+		mcp.AddTool(srv, &mcp.Tool{Name: "script_job_list", Description: "List asynchronous script jobs."}, s.scriptJobList)
 	}
 
 	srv.AddResource(&mcp.Resource{
@@ -123,6 +153,17 @@ func (s *Server) register(srv *mcp.Server) {
 		Description: "Sessions owned by this user", MIMEType: "application/json",
 	}, func(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		data, _ := json.MarshalIndent(s.Manager.List(), "", "  ")
+		return resourceText(req.Params.URI, string(data)), nil
+	})
+	srv.AddResource(&mcp.Resource{
+		URI: "autochrome://jobs", Name: "jobs", Title: "Script jobs",
+		Description: "Asynchronous script jobs for this user", MIMEType: "application/json",
+	}, func(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		var list []jobs.Job
+		if s.Jobs != nil {
+			list = s.Jobs.List()
+		}
+		data, _ := json.MarshalIndent(list, "", "  ")
 		return resourceText(req.Params.URI, string(data)), nil
 	})
 	srv.AddResource(&mcp.Resource{
@@ -673,4 +714,86 @@ func (s *Server) scriptRun(_ context.Context, _ *mcp.CallToolRequest, in ScriptR
 		return nil, nil, err
 	}
 	return nil, result, nil
+}
+
+// ---- async script jobs ----
+
+type ScriptJobStartIn struct {
+	Name      string         `json:"name" jsonschema:"script name"`
+	Input     map[string]any `json:"input,omitempty" jsonschema:"JSON input passed to the script"`
+	SessionID string         `json:"session_id,omitempty" jsonschema:"existing session id exposed as input.session_id"`
+}
+
+type ScriptJobStartOut struct {
+	JobID  string `json:"job_id"`
+	Status string `json:"status"`
+}
+
+func (s *Server) scriptJobStart(_ context.Context, _ *mcp.CallToolRequest, in ScriptJobStartIn) (*mcp.CallToolResult, ScriptJobStartOut, error) {
+	if !s.AllowScripts {
+		return nil, ScriptJobStartOut{}, fmt.Errorf("scripts are disabled for this user")
+	}
+	if s.Jobs == nil {
+		return nil, ScriptJobStartOut{}, fmt.Errorf("job manager is not ready")
+	}
+	job, err := s.Jobs.Start(in.Name, in.Input, in.SessionID)
+	if err != nil {
+		return nil, ScriptJobStartOut{}, err
+	}
+	return nil, ScriptJobStartOut{JobID: job.ID, Status: job.Status}, nil
+}
+
+type JobIDIn struct {
+	JobID string `json:"job_id" jsonschema:"job id"`
+}
+
+func (s *Server) scriptJobStatus(_ context.Context, _ *mcp.CallToolRequest, in JobIDIn) (*mcp.CallToolResult, jobs.Job, error) {
+	if s.Jobs == nil {
+		return nil, jobs.Job{}, fmt.Errorf("job manager is not ready")
+	}
+	job, ok := s.Jobs.Get(in.JobID)
+	if !ok {
+		return nil, jobs.Job{}, fmt.Errorf("job %q not found", in.JobID)
+	}
+	return nil, job, nil
+}
+
+type ScriptJobLogsOut struct {
+	Logs string `json:"logs"`
+}
+
+func (s *Server) scriptJobLogs(_ context.Context, _ *mcp.CallToolRequest, in JobIDIn) (*mcp.CallToolResult, ScriptJobLogsOut, error) {
+	if s.Jobs == nil {
+		return nil, ScriptJobLogsOut{}, fmt.Errorf("job manager is not ready")
+	}
+	logs, err := s.Jobs.Logs(in.JobID)
+	if err != nil {
+		return nil, ScriptJobLogsOut{}, err
+	}
+	return nil, ScriptJobLogsOut{Logs: logs}, nil
+}
+
+type ScriptJobCancelOut struct {
+	Cancelled bool `json:"cancelled"`
+}
+
+func (s *Server) scriptJobCancel(_ context.Context, _ *mcp.CallToolRequest, in JobIDIn) (*mcp.CallToolResult, ScriptJobCancelOut, error) {
+	if s.Jobs == nil {
+		return nil, ScriptJobCancelOut{}, fmt.Errorf("job manager is not ready")
+	}
+	if err := s.Jobs.Cancel(in.JobID); err != nil {
+		return nil, ScriptJobCancelOut{}, err
+	}
+	return nil, ScriptJobCancelOut{Cancelled: true}, nil
+}
+
+type ScriptJobListOut struct {
+	Jobs []jobs.Job `json:"jobs"`
+}
+
+func (s *Server) scriptJobList(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ScriptJobListOut, error) {
+	if s.Jobs == nil {
+		return nil, ScriptJobListOut{}, fmt.Errorf("job manager is not ready")
+	}
+	return nil, ScriptJobListOut{Jobs: s.Jobs.List()}, nil
 }

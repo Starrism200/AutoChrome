@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"autochrome/internal/jobs"
 	"autochrome/internal/session"
 	"autochrome/internal/users"
 )
@@ -26,7 +27,11 @@ func newTestAPI(t *testing.T) (*Server, *httptest.Server) {
 	}
 	s := New(u, "/bin/true")
 	s.Token = "test-token"
+	s.AllowScripts = true
+	s.AllowEval = true
 	s.Manager = session.NewManager(u, "/bin/true")
+	s.Jobs = jobs.New(u, s.Manager, true, nil)
+	t.Cleanup(s.Jobs.Close)
 	mux := http.NewServeMux()
 	s.routes(mux)
 	ts := httptest.NewServer(s.cors(s.auth(mux)))
@@ -339,5 +344,55 @@ func TestContainerNameAndUpdate(t *testing.T) {
 	resp, _ = request(t, ts, http.MethodDelete, "/api/v1/containers/beta", "test-token", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("delete container = %d", resp.StatusCode)
+	}
+}
+
+func TestAsyncScriptJobs(t *testing.T) {
+	_, ts := newTestAPI(t)
+	resp, data := request(t, ts, http.MethodPut, "/api/v1/scripts/jobdemo", "test-token", map[string]any{
+		"source":  "console.log('hello'); return {ok: true, n: input.n};",
+		"timeout": "10s",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("write script = %d %s", resp.StatusCode, data)
+	}
+	resp, data = request(t, ts, http.MethodPost, "/api/v1/scripts/jobdemo/jobs", "test-token", map[string]any{
+		"input": map[string]any{"n": 7},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("start job = %d %s", resp.StatusCode, data)
+	}
+	var job struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &job); err != nil || job.ID == "" {
+		t.Fatalf("job id: %v %s", err, data)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, data = request(t, ts, http.MethodGet, "/api/v1/jobs/"+job.ID, "test-token", nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("get job = %d %s", resp.StatusCode, data)
+		}
+		var current struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(data, &current); err != nil {
+			t.Fatal(err)
+		}
+		if current.Status == "succeeded" {
+			break
+		}
+		if current.Status == "failed" || current.Status == "cancelled" {
+			t.Fatalf("job status = %s %s", current.Status, data)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job timeout: %s", data)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	resp, data = request(t, ts, http.MethodGet, "/api/v1/jobs/"+job.ID+"/logs", "test-token", nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(data), "finished: succeeded") {
+		t.Fatalf("logs = %d %s", resp.StatusCode, data)
 	}
 }

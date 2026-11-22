@@ -52,7 +52,15 @@ func New(user users.User, mgr *session.Manager, logw io.Writer) *Runner {
 }
 
 // Run executes script with input and returns its exported result.
-func (r *Runner) Run(script string, input map[string]any) (result any, err error) {
+func (r *Runner) Run(script string, input map[string]any) (any, error) {
+	return r.RunContext(context.Background(), script, input)
+}
+
+// RunContext is Run with cancellation and timeout support.
+func (r *Runner) RunContext(ctx context.Context, script string, input map[string]any) (result any, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	r.opened = nil
 	r.openMarker = map[string]bool{}
 	vm := goja.New()
@@ -84,6 +92,16 @@ func (r *Runner) Run(script string, input map[string]any) (result any, err error
 		vm.Interrupt("script timeout")
 	})
 	defer timer.Stop()
+
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			vm.Interrupt("script cancelled")
+		case <-stop:
+		}
+	}()
+	defer close(stop)
 
 	wrapped := "(function(input, ac, console) {\n" + script + "\n})"
 	v, err := vm.RunString(wrapped)

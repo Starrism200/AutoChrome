@@ -9,13 +9,22 @@ Cursor、VS Code、opencode 等）可以直接打开浏览器、读取页面、�
 
 ## 1. 启动
 
+本地 stdio：
+
 ```bash
 ./bin/autochrome mcp                      # 默认用户
 ./bin/autochrome mcp -user alice          # 只暴露 alice 的目录和脚本
 ```
 
-每个用户启动一个独立进程，这是 L2 隔离：独立目录、独立脚本、独立并发槽位、
-独立浏览器会话。
+远程 Streamable HTTP（推荐给其它服务器）：
+
+```bash
+./bin/autochrome serve -user alice --mcp --addr 0.0.0.0:8787
+# MCP endpoint: http://serverA:8787/mcp
+```
+
+每个用户一个独立进程，这是 L2 隔离：独立目录、独立脚本、独立并发槽位、
+独立浏览器会话。REST 和 MCP 共享同一个浏览器会话管理器。
 
 ## 2. 客户端配置
 
@@ -32,7 +41,23 @@ opencode / Claude Desktop / Cursor 等通用写法：
 }
 ```
 
-如果客户端的工作目录不是项目根目录，设置：
+远程 MCP 客户端（Streamable HTTP）：
+
+```json
+{
+  "mcpServers": {
+    "autochrome": {
+      "type": "streamable-http",
+      "url": "http://serverA:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer <api_token>"
+      }
+    }
+  }
+}
+```
+
+本地 stdio 客户端如果工作目录不是项目根目录，设置：
 
 ```json
 {
@@ -72,7 +97,12 @@ opencode / Claude Desktop / Cursor 等通用写法：
 | `desktop_info` | 返回 noVNC 地址（启用 `--vnc` 时） |
 | `browser_eval` | 页面内执行 JS（需 `allow_eval`） |
 | `script_list` | 列出当前用户的 JS 脚本 |
-| `script_run` | 运行脚本（需 `allow_scripts`） |
+| `script_run` | 同步运行脚本（需 `allow_scripts`） |
+| `script_job_start` | 启动异步脚本任务 |
+| `script_job_status` | 查询任务状态/结果 |
+| `script_job_logs` | 读取任务日志 |
+| `script_job_cancel` | 取消任务 |
+| `script_job_list` | 任务列表 |
 
 `browser_wait` 支持同时等待 `selector`、`hidden_selector`、`text`、
 `url_contains`、`cookie_name`，用于判断扫码/验证码是否完成。
@@ -132,7 +162,8 @@ AI 遇到二维码 / 短信验证码 / 图片验证码时，可以：
 3. `desktop_info` 返回 noVNC 地址，让用户直接接管；
 4. `browser_wait` 等待登录/验证完成。
 
-详见 [INTERACTION.md](INTERACTION.md) 和 [VNC.md](VNC.md)。
+详见 [INTERACTION.md](INTERACTION.md)、[VNC.md](VNC.md) 和
+[REMOTE.md](REMOTE.md)。
 
 ## 7. 权限
 

@@ -584,6 +584,47 @@ paths:
       summary: Run script
       responses:
         "200": { description: Script result }
+  /scripts/{name}/jobs:
+    parameters:
+      - $ref: "#/components/parameters/Name"
+    post:
+      summary: Start asynchronous script job
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input: { type: object }
+                session_id: { type: string }
+      responses:
+        "202": { description: Job }
+  /jobs:
+    get:
+      summary: List asynchronous jobs
+      responses:
+        "200": { description: Jobs }
+  /jobs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get job status and result
+      responses:
+        "200": { description: Job }
+    delete:
+      summary: Cancel job
+      responses:
+        "200": { description: Cancelled }
+  /jobs/{id}/logs:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Job log text
+      responses:
+        "200":
+          description: Log
+          content:
+            text/plain: {}
   /chrome:
     get:
       summary: Current Chrome version

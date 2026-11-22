@@ -567,6 +567,7 @@ func cmdServe(args []string) {
 	allowEval := fs.Bool("allow-eval", false, "force-enable POST /eval")
 	allowScripts := fs.Bool("allow-scripts", false, "force-enable POST /scripts/{name}/run")
 	vnc := fs.Bool("vnc", false, "start x11vnc + noVNC")
+	mcpEnable := fs.Bool("mcp", false, "mount MCP Streamable HTTP at /mcp")
 	vncPassword := fs.String("vnc-password", "", "optional VNC password (also $AUTOCHROME_VNC_PASSWORD)")
 	vncStart := fs.Int("vnc-port-start", 0, "override first port for auto-assigned VNC/noVNC ports")
 	vncEnd := fs.Int("vnc-port-end", 0, "override last port for auto-assigned VNC/noVNC ports")
@@ -579,6 +580,7 @@ func cmdServe(args []string) {
 	srv := apiserver.New(u, *chrome)
 	srv.Addr = *addr
 	srv.AllowOrigin = *cors
+	srv.EnableMCP = *mcpEnable
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	if set["allow-eval"] {
@@ -614,6 +616,9 @@ func cmdServe(args []string) {
 	}
 
 	log.Printf("api: http://%s/api/v1 (user %s)", *addr, u.ID)
+	if *mcpEnable {
+		log.Printf("mcp: http://%s/mcp", *addr)
+	}
 	switch {
 	case provided:
 		log.Printf("api token: provided by flag or AUTOCHROME_API_TOKEN")
