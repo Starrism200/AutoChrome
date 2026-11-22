@@ -71,6 +71,17 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | GET | `/api/v1/health` | 健康检查（无需认证） |
 | GET | `/api/v1/user` | 当前用户与配置 |
 
+### 存储
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/storage` | 当前环境/附件/脚本/截图根目录 |
+| PUT | `/api/v1/storage` | 修改 `{env_root?, attachment_root?}` |
+
+`env_root` / `attachment_root` 可以是绝对路径，也可以相对项目根目录。
+修改 `env_root` 后，旧环境通过 `envs.json` 索引仍然可以查询和打开；新环境使用
+新目录。附件索引保存绝对路径，旧附件不受影响。
+
 ### 环境
 
 | 方法 | 路径 | 说明 |
@@ -81,6 +92,15 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | DELETE | `/api/v1/envs/{id}` | 删除环境（会先关闭该环境的会话） |
 | PUT | `/api/v1/envs/{id}/proxy` | 绑定代理 `{proxy_id}` |
 | DELETE | `/api/v1/envs/{id}/proxy` | 解绑代理 |
+
+### 环境打包
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/envs/{id}/export` | 下载 `.tar.gz`（含 profile 和 `env.json`） |
+| POST | `/api/v1/envs/import` | multipart `file` 导入 `.tar.gz` |
+
+导出前可加 `?close=1` 先关闭该环境的会话。导入会拒绝路径穿越和已存在的 ID。
 
 ### 代理
 
@@ -131,6 +151,50 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | GET | `/api/v1/sessions/{id}/qr` | 返回二维码 PNG |
 | POST | `/api/v1/sessions/{id}/click_xy` | `{x, y}` |
 | POST | `/api/v1/sessions/{id}/scroll` | `{dx, dy}` |
+
+### 附件
+
+附件默认存放在用户 `attachment_root`（默认 `data/users/<id>/attachments` 或
+`data/attachments`），索引在 `data/users/<id>/attachments.json`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/attachments` | 附件列表 |
+| POST | `/api/v1/attachments` | multipart 上传，字段 `file`，可选 `name` |
+| GET | `/api/v1/attachments/{id}` | 附件元数据 |
+| PATCH | `/api/v1/attachments/{id}` | 重命名 `{name}` |
+| GET | `/api/v1/attachments/{id}/download` | 下载原始文件 |
+| DELETE | `/api/v1/attachments/{id}` | 删除 |
+
+单文件上限 512MB。
+
+### Cookie 与 UA
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/sessions/{id}/auth` | 导出 Cookie + `user_agent` + 语言/平台 |
+| POST | `/api/v1/sessions/{id}/auth` | 导入 Cookie/UA（JSON） |
+| GET | `/api/v1/sessions/{id}/auth/export?download=1` | 以文件形式下载 |
+| POST | `/api/v1/sessions/{id}/auth/import` | multipart `file` 导入 JSON |
+
+UA 通过 CDP `Emulation.setUserAgentOverride` 设置，属于字符串级覆盖；不会自动
+重建 UA-CH 等更细的客户端提示。
+
+导出格式：
+
+```json
+{
+  "user_agent": "Mozilla/5.0 ...",
+  "accept_language": "en-US",
+  "platform": "Win32",
+  "url": "https://example.com/",
+  "title": "Example Domain",
+  "cookies": [
+    {"name": "sessionid", "value": "...", "domain": "example.com", "path": "/", "secure": true, "httpOnly": true}
+  ],
+  "exported_at": "2026-11-22T14:00:00Z"
+}
+```
 
 ### 交互页面
 
@@ -215,6 +279,17 @@ curl -s -X POST -H "$H" -H 'Content-Type: application/json' \
 curl -s -X POST -H "$H" -H 'Content-Type: application/json' \
   -d '{"input":{"url":"https://example.com"}}' \
   "$BASE/scripts/example/run"
+
+# 上传附件
+curl -s -X POST -H "$H" -F 'file=@./avatar.png' "$BASE/attachments"
+
+# 导出/导入环境
+curl -s -H "$H" "$BASE/envs/account-01/export" -o account-01.tar.gz
+curl -s -X POST -H "$H" -F 'file=@account-01.tar.gz' "$BASE/envs/import"
+
+# 导出/导入 Cookie + UA
+curl -s -H "$H" "$BASE/sessions/$SID/auth/export?download=1" -o auth.json
+curl -s -X POST -H "$H" -F 'file=@auth.json' "$BASE/sessions/$SID/auth/import"
 
 # 生成交互页面（扫码/验证码/打码人工接管）
 curl -s -H "$H" "$BASE/sessions/$SID/interaction"

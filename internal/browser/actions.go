@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -456,6 +457,22 @@ func SetCookies(ctx context.Context, cookies []*network.CookieParam) error {
 	_, err := chromedp.Run(ctx, func(ctx context.Context, t *chromedp.Target) (chromedp.Void, error) {
 		_, err := cdp.Call(ctx, t, network.SetCookies, network.SetCookiesParams{Cookies: cookies})
 		return chromedp.Void{}, err
+	})
+	return err
+}
+
+// SetUserAgent overrides the user agent for the current target.
+func SetUserAgent(ctx context.Context, userAgent, acceptLanguage, platform string) error {
+	if userAgent == "" {
+		return fmt.Errorf("user agent is required")
+	}
+	params := emulation.SetUserAgentOverrideParams{UserAgent: userAgent, AcceptLanguage: acceptLanguage}
+	if platform != "" {
+		params.Platform = platform
+	}
+	_, err := chromedp.Run(ctx, func(ctx context.Context, t *chromedp.Target) (chromedp.Void, error) {
+		_, e := cdp.Call(ctx, t, emulation.SetUserAgentOverride, params)
+		return chromedp.Void{}, e
 	})
 	return err
 }

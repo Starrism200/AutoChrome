@@ -19,6 +19,9 @@
 - stdio MCP 服务器，提供浏览器工具与资源
 - HTTP/JSON API（`autochrome serve`），Bearer Token 认证
 - 代理管理、按实例绑定代理、代理连通性检测
+- 可配置环境/附件存储路径，通用附件上传下载
+- 环境打包导出/导入（`.tar.gz`）
+- Cookie + User-Agent 导入导出
 - 短期交互页面，用于扫码 / 验证码 / 打码人工接管
 - VNC/noVNC 远程桌面，支持真人接管（扫码、短信验证码、打码）
 - 二维码/OTP/验证码检测、二维码截图与坐标点击
@@ -156,7 +159,8 @@ return { title, nodes: snap.nodes.length };
 服务使用用户级 token，存放在 `data/users/alice/api_token`，在 `/api/v1` 下提供
 环境、会话、导航、快照、截图、验证码检测、脚本、代理和 VNC 信息。还支持代理
 增删改查/检测、按环境绑定代理，以及 `GET /api/v1/sessions/{id}/interaction`
-生成的短期交互页面。
+生成的短期交互页面；以及存储路径、附件上传下载、环境打包导入导出、
+Cookie+UA 导入导出。
 
 ```bash
 TOKEN=$(cat data/users/alice/api_token)
@@ -198,7 +202,8 @@ cmd/autochrome/        命令行入口：gen / open / user / script / mcp
 internal/browser/      Chrome 启动、CDP 操作、快照、截图
 internal/browserexec/  在 DISPLAY 或 xvfb-run 下启动子进程
 internal/browserslot/  跨进程浏览器并发槽位
-internal/envdir/       环境目录与元数据
+internal/envdir/       环境目录、索引与打包
+internal/attachments/  通用附件存储
 internal/fingerprint/  确定性浏览器指纹生成
 internal/users/        用户目录、配额与权限
 internal/session/      长生命周期浏览器会话

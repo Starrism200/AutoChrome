@@ -27,24 +27,27 @@ var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // User is one isolated environment owner.
 type User struct {
-	ID           string   `json:"id"`
-	CreatedAt    string   `json:"created_at,omitempty"`
-	MaxEnvs      int      `json:"max_envs,omitempty"`
-	MaxBrowsers  int      `json:"max_browsers,omitempty"`
-	AllowEval    bool     `json:"allow_eval"`
-	AllowScripts bool     `json:"allow_scripts"`
-	AllowedHosts []string `json:"allowed_hosts,omitempty"`
-	DefaultProxy string   `json:"default_proxy,omitempty"`
-	VNCPortStart int      `json:"vnc_port_start,omitempty"`
-	VNCPortEnd   int      `json:"vnc_port_end,omitempty"`
+	ID                 string   `json:"id"`
+	CreatedAt          string   `json:"created_at,omitempty"`
+	MaxEnvs            int      `json:"max_envs,omitempty"`
+	MaxBrowsers        int      `json:"max_browsers,omitempty"`
+	AllowEval          bool     `json:"allow_eval"`
+	AllowScripts       bool     `json:"allow_scripts"`
+	AllowedHosts       []string `json:"allowed_hosts,omitempty"`
+	DefaultProxy       string   `json:"default_proxy,omitempty"`
+	VNCPortStart       int      `json:"vnc_port_start,omitempty"`
+	VNCPortEnd         int      `json:"vnc_port_end,omitempty"`
+	EnvRootPath        string   `json:"env_root,omitempty"`
+	AttachmentRootPath string   `json:"attachment_root,omitempty"`
 
-	Home       string `json:"-"`
-	Root       string `json:"-"`
-	EnvRoot    string `json:"-"`
-	ScriptRoot string `json:"-"`
-	ShotRoot   string `json:"-"`
-	LogRoot    string `json:"-"`
-	SlotDir    string `json:"-"`
+	Home           string `json:"-"`
+	Root           string `json:"-"`
+	EnvRoot        string `json:"-"`
+	AttachmentRoot string `json:"-"`
+	ScriptRoot     string `json:"-"`
+	ShotRoot       string `json:"-"`
+	LogRoot        string `json:"-"`
+	SlotDir        string `json:"-"`
 }
 
 // Home returns the project root. AUTOCHROME_HOME wins, then the parent of the
@@ -86,6 +89,7 @@ func Resolve(id string) (User, error) {
 	if id == DefaultID {
 		u.Root = home
 		u.EnvRoot = filepath.Join(home, "profiles")
+		u.AttachmentRoot = filepath.Join(home, "data", "attachments")
 		u.ScriptRoot = filepath.Join(home, "scripts", "custom")
 		u.ShotRoot = filepath.Join(home, "data", "screenshots")
 		u.LogRoot = filepath.Join(home, "data", "logs")
@@ -101,6 +105,7 @@ func Resolve(id string) (User, error) {
 
 	u.Root = filepath.Join(home, "data", "users", id)
 	u.EnvRoot = filepath.Join(u.Root, "profiles")
+	u.AttachmentRoot = filepath.Join(u.Root, "attachments")
 	u.ScriptRoot = filepath.Join(u.Root, "scripts")
 	u.ShotRoot = filepath.Join(u.Root, "screenshots")
 	u.LogRoot = filepath.Join(u.Root, "logs")
@@ -139,6 +144,7 @@ func Add(id string) (User, error) {
 	root := filepath.Join(home, "data", "users", id)
 	u := User{ID: id, Home: home, Root: root}
 	u.EnvRoot = filepath.Join(root, "profiles")
+	u.AttachmentRoot = filepath.Join(root, "attachments")
 	u.ScriptRoot = filepath.Join(root, "scripts")
 	u.ShotRoot = filepath.Join(root, "screenshots")
 	u.LogRoot = filepath.Join(root, "logs")
@@ -189,16 +195,20 @@ func (u User) Save() error {
 	if err := u.EnsureDirs(); err != nil {
 		return err
 	}
+	path := u.settingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	b, err := json.MarshalIndent(u, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(u.settingsPath(), b, 0o600)
+	return os.WriteFile(path, b, 0o600)
 }
 
 // EnsureDirs creates every directory owned by the user.
 func (u User) EnsureDirs() error {
-	for _, dir := range []string{u.EnvRoot, u.ScriptRoot, u.ShotRoot, u.LogRoot, u.SlotDir} {
+	for _, dir := range []string{u.EnvRoot, u.AttachmentRoot, u.ScriptRoot, u.ShotRoot, u.LogRoot, u.SlotDir} {
 		if dir == "" {
 			continue
 		}
@@ -207,6 +217,53 @@ func (u User) EnsureDirs() error {
 		}
 	}
 	return nil
+}
+
+// ApplyPaths resolves user-level storage overrides.
+func (u *User) applyPaths() {
+	if u.EnvRootPath != "" {
+		u.EnvRoot = absPath(u.Home, u.EnvRootPath)
+	}
+	if u.AttachmentRootPath != "" {
+		u.AttachmentRoot = absPath(u.Home, u.AttachmentRootPath)
+	}
+}
+
+// SetStorage persists user-level environment and attachment roots.
+func (u *User) SetStorage(envRoot, attachmentRoot string) error {
+	if envRoot != "" {
+		u.EnvRootPath = absPath(u.Home, envRoot)
+		u.EnvRoot = u.EnvRootPath
+	}
+	if attachmentRoot != "" {
+		u.AttachmentRootPath = absPath(u.Home, attachmentRoot)
+		u.AttachmentRoot = u.AttachmentRootPath
+	}
+	if err := u.EnsureDirs(); err != nil {
+		return err
+	}
+	return u.Save()
+}
+
+// RegistryPath is the per-user environment index.
+func (u User) RegistryPath() string {
+	return filepath.Join(u.Home, "data", "users", u.ID, "envs.json")
+}
+
+// AttachmentIndexPath is the per-user attachment index.
+func (u User) AttachmentIndexPath() string {
+	return filepath.Join(u.Home, "data", "users", u.ID, "attachments.json")
+}
+
+func absPath(home, p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(home, p)
 }
 
 // VNCRange returns the configured auto-allocation range for VNC ports.
@@ -255,6 +312,9 @@ func (u *User) load(path string) error {
 	u.AllowScripts = stored.AllowScripts
 	u.AllowedHosts = stored.AllowedHosts
 	u.DefaultProxy = stored.DefaultProxy
+	u.EnvRootPath = stored.EnvRootPath
+	u.AttachmentRootPath = stored.AttachmentRootPath
+	u.applyPaths()
 	if stored.VNCPortStart > 0 {
 		u.VNCPortStart = stored.VNCPortStart
 	}

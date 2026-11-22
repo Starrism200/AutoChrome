@@ -108,6 +108,9 @@ func cmdGen(args []string) {
 	if err != nil {
 		log.Fatalf("create environment: %v", err)
 	}
+	if meta, ok := envdir.ReadMeta(dir); ok {
+		_ = envdir.NewRegistry(u.RegistryPath()).Put(meta)
+	}
 	fmt.Printf("user=%s\n", u.ID)
 	fmt.Printf("env_dir=%s\n", dir)
 	fmt.Printf("fingerprint=%s\n", fingerprint.Encode(fp))

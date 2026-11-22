@@ -51,8 +51,9 @@ type Session struct {
 
 // Manager creates, stores and closes sessions for one user.
 type Manager struct {
-	user   users.User
-	chrome string
+	user     users.User
+	chrome   string
+	registry *envdir.Registry
 
 	mu              sync.Mutex
 	sessions        map[string]*Session
@@ -65,11 +66,33 @@ func NewManager(user users.User, chrome string) *Manager {
 	if chrome == "" {
 		chrome = "/usr/bin/google-chrome"
 	}
-	return &Manager{user: user, chrome: chrome, sessions: map[string]*Session{}}
+	return &Manager{
+		user:     user,
+		chrome:   chrome,
+		registry: envdir.NewRegistry(user.RegistryPath()),
+		sessions: map[string]*Session{},
+	}
 }
 
 // User returns the owner of this manager.
-func (m *Manager) User() users.User { return m.user }
+func (m *Manager) User() users.User {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.user
+}
+
+// SetUser updates the manager after user-level storage settings change.
+func (m *Manager) SetUser(u users.User) {
+	m.mu.Lock()
+	m.user = u
+	m.mu.Unlock()
+}
+
+func (m *Manager) userSnapshot() users.User {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.user
+}
 
 // SetDisplay makes the manager use a display owned by someone else (for
 // example the desktop/VNC service) instead of starting its own Xvfb.
@@ -105,19 +128,36 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Sess
 	if platform == "" {
 		platform = "default"
 	}
-	dir := filepath.Join(m.user.EnvRoot, envdir.Name(platform, envID))
-	meta, hasMeta := envdir.ReadMeta(dir)
+	user := m.userSnapshot()
+	var dir string
+	var meta envdir.Meta
+	hasMeta := false
+	if reg, ok := m.registry.Get(envID); ok && reg.Dir != "" {
+		dir, meta, hasMeta = reg.Dir, reg, true
+	} else {
+		dir = filepath.Join(user.EnvRoot, envdir.Name(platform, envID))
+		meta, hasMeta = envdir.ReadMeta(dir)
+	}
 	fp := fingerprint.Generate(envID)
 	if hasMeta && meta.Fingerprint.UserAgent != "" {
 		fp = meta.Fingerprint
-	} else if _, err := envdir.Create(m.user.EnvRoot, platform, envID, fp); err != nil {
-		return nil, err
+	} else {
+		created, err := envdir.CreateAt(dir, platform, envID, fp)
+		if err != nil {
+			return nil, err
+		}
+		meta, hasMeta = created, true
 	}
+	meta.ID, meta.Dir = envID, dir
+	if meta.Platform == "" {
+		meta.Platform = platform
+	}
+	_ = m.registry.Put(meta)
 	if proxy == "" && hasMeta {
 		proxy = meta.Proxy
 	}
 	if proxy == "" {
-		proxy = m.user.DefaultProxy
+		proxy = user.DefaultProxy
 	}
 
 	var env []string
@@ -136,8 +176,8 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Sess
 		Headless:    headless,
 		Timeout:     -1,
 		Fingerprint: &fp,
-		SlotDir:     m.user.SlotDir,
-		SlotMax:     m.user.BrowserMax(),
+		SlotDir:     user.SlotDir,
+		SlotMax:     user.BrowserMax(),
 		Env:         env,
 	})
 	if err != nil {

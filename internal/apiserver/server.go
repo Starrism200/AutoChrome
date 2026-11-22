@@ -11,17 +11,21 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 
+	"autochrome/internal/attachments"
 	"autochrome/internal/browser"
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
@@ -48,6 +52,8 @@ type Server struct {
 	Desktop      *desktop.Desktop
 	Manager      *session.Manager
 	Proxies      *proxy.Store
+	Registry     *envdir.Registry
+	Attachments  *attachments.Store
 
 	interMu      sync.Mutex
 	interactions map[string]*interaction
@@ -67,6 +73,8 @@ func New(u users.User, chrome string) *Server {
 		AllowEval:    u.AllowEval,
 		AllowScripts: u.AllowScripts,
 		Proxies:      proxy.NewStore(filepath.Join(u.Home, "data", "users", u.ID, "proxies.json")),
+		Registry:     envdir.NewRegistry(u.RegistryPath()),
+		Attachments:  attachments.NewStore(u.AttachmentRoot, u.AttachmentIndexPath()),
 		interactions: map[string]*interaction{},
 	}
 }
@@ -108,6 +116,8 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/user", s.handleUser)
+	mux.HandleFunc("GET /api/v1/storage", s.handleStorageGet)
+	mux.HandleFunc("PUT /api/v1/storage", s.handleStoragePut)
 
 	mux.HandleFunc("GET /api/v1/envs", s.handleEnvList)
 	mux.HandleFunc("POST /api/v1/envs", s.handleEnvCreate)
@@ -115,6 +125,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/envs/{id}", s.handleEnvDelete)
 	mux.HandleFunc("PUT /api/v1/envs/{id}/proxy", s.handleEnvBindProxy)
 	mux.HandleFunc("DELETE /api/v1/envs/{id}/proxy", s.handleEnvUnbindProxy)
+	mux.HandleFunc("GET /api/v1/envs/{id}/export", s.handleEnvExport)
+	mux.HandleFunc("POST /api/v1/envs/import", s.handleEnvImport)
 
 	mux.HandleFunc("GET /api/v1/proxies", s.handleProxyList)
 	mux.HandleFunc("POST /api/v1/proxies", s.handleProxyAdd)
@@ -146,6 +158,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/qr", s.handleQR)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/click_xy", s.handleClickXY)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/scroll", s.handleScroll)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/auth", s.handleAuthGet)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/auth", s.handleAuthSet)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/auth/export", s.handleAuthExport)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/auth/import", s.handleAuthImport)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/interaction", s.handleInteraction)
 
 	mux.HandleFunc("GET /api/v1/scripts", s.handleScriptList)
@@ -153,6 +169,13 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/scripts/{name}", s.handleScriptWrite)
 	mux.HandleFunc("DELETE /api/v1/scripts/{name}", s.handleScriptDelete)
 	mux.HandleFunc("POST /api/v1/scripts/{name}/run", s.handleScriptRun)
+
+	mux.HandleFunc("GET /api/v1/attachments", s.handleAttachmentList)
+	mux.HandleFunc("POST /api/v1/attachments", s.handleAttachmentAdd)
+	mux.HandleFunc("GET /api/v1/attachments/{id}", s.handleAttachmentGet)
+	mux.HandleFunc("PATCH /api/v1/attachments/{id}", s.handleAttachmentRename)
+	mux.HandleFunc("GET /api/v1/attachments/{id}/download", s.handleAttachmentDownload)
+	mux.HandleFunc("DELETE /api/v1/attachments/{id}", s.handleAttachmentDelete)
 
 	mux.HandleFunc("GET /api/v1/desktop", s.handleDesktop)
 
@@ -220,20 +243,42 @@ func (s *Server) handleEnvList(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) listEnvs() []envdir.Meta {
-	out := []envdir.Meta{}
-	entries, err := os.ReadDir(s.User.EnvRoot)
-	if err != nil {
-		return out
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if meta, ok := envdir.ReadMeta(filepath.Join(s.User.EnvRoot, e.Name())); ok {
-			out = append(out, meta)
+	byID := map[string]envdir.Meta{}
+	if list, err := s.Registry.List(); err == nil {
+		for _, m := range list {
+			byID[m.ID] = m
 		}
 	}
+	if list, err := envdir.List(s.User.EnvRoot); err == nil {
+		for _, m := range list {
+			if _, ok := byID[m.ID]; ok {
+				continue
+			}
+			byID[m.ID] = m
+			_ = s.Registry.Put(m)
+		}
+	}
+	out := make([]envdir.Meta, 0, len(byID))
+	for _, m := range byID {
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+func (s *Server) findEnv(id string) (envdir.Meta, string, bool) {
+	if m, ok := s.Registry.Get(id); ok {
+		dir := m.Dir
+		if dir == "" {
+			dir = filepath.Join(s.User.EnvRoot, envdir.Name(m.Platform, m.ID))
+		}
+		return m, dir, true
+	}
+	m, dir, ok := envdir.Find(s.User.EnvRoot, id)
+	if ok {
+		_ = s.Registry.Put(m)
+	}
+	return m, dir, ok
 }
 
 func (s *Server) handleEnvCreate(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +302,9 @@ func (s *Server) handleEnvCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "env_create_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"dir": dir, "fingerprint": fp})
+	meta, _ := envdir.ReadMeta(dir)
+	_ = s.Registry.Put(meta)
+	writeJSON(w, http.StatusCreated, map[string]any{"dir": dir, "fingerprint": fp, "env": meta})
 }
 
 // ---- sessions ----
@@ -890,7 +937,7 @@ func (s *Server) handleProxyCheck(w http.ResponseWriter, r *http.Request) {
 // ---- environment management ----
 
 func (s *Server) handleEnvGet(w http.ResponseWriter, r *http.Request) {
-	meta, _, ok := envdir.Find(s.User.EnvRoot, r.PathValue("id"))
+	meta, _, ok := s.findEnv(r.PathValue("id"))
 	if !ok {
 		writeError(w, http.StatusNotFound, "env_not_found", "environment not found")
 		return
@@ -900,15 +947,17 @@ func (s *Server) handleEnvGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEnvDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, _, ok := envdir.Find(s.User.EnvRoot, id); !ok {
+	meta, dir, ok := s.findEnv(id)
+	if !ok {
 		writeError(w, http.StatusNotFound, "env_not_found", "environment not found")
 		return
 	}
 	s.Manager.CloseEnv(id)
-	if err := envdir.Delete(s.User.EnvRoot, id); err != nil {
+	if err := envdir.RemoveDir(dir); err != nil {
 		writeError(w, http.StatusInternalServerError, "env_delete_failed", err.Error())
 		return
 	}
+	_ = s.Registry.Delete(meta.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -919,13 +968,19 @@ func (s *Server) handleEnvBindProxy(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	meta, dir, ok := s.findEnv(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "environment not found")
+		return
+	}
 	if in.ProxyID == "" {
-		meta, err := envdir.SetProxy(s.User.EnvRoot, r.PathValue("id"), "", "")
+		updated, err := envdir.SetProxyDir(dir, meta, "", "")
 		if err != nil {
-			writeError(w, http.StatusNotFound, "env_not_found", err.Error())
+			writeError(w, http.StatusInternalServerError, "env_bind_failed", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, meta)
+		_ = s.Registry.Put(updated)
+		writeJSON(w, http.StatusOK, updated)
 		return
 	}
 	p, err := s.Proxies.Get(in.ProxyID)
@@ -937,21 +992,28 @@ func (s *Server) handleEnvBindProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "proxy_disabled", "proxy is disabled")
 		return
 	}
-	meta, err := envdir.SetProxy(s.User.EnvRoot, r.PathValue("id"), p.ID, p.URL)
+	updated, err := envdir.SetProxyDir(dir, meta, p.ID, p.URL)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "env_not_found", err.Error())
+		writeError(w, http.StatusInternalServerError, "env_bind_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, meta)
+	_ = s.Registry.Put(updated)
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Server) handleEnvUnbindProxy(w http.ResponseWriter, r *http.Request) {
-	meta, err := envdir.SetProxy(s.User.EnvRoot, r.PathValue("id"), "", "")
-	if err != nil {
-		writeError(w, http.StatusNotFound, "env_not_found", err.Error())
+	meta, dir, ok := s.findEnv(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "environment not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, meta)
+	updated, err := envdir.SetProxyDir(dir, meta, "", "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "env_unbind_failed", err.Error())
+		return
+	}
+	_ = s.Registry.Put(updated)
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // ---- interaction page ----
@@ -1228,6 +1290,330 @@ func (s *Server) handleInteractionClickXY(w http.ResponseWriter, r *http.Request
 	}
 	if err := sess.Do(func(ctx context.Context) error { return browser.ClickXY(ctx, in.X, in.Y) }); err != nil {
 		writeError(w, http.StatusBadGateway, "click_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---- storage ----
+
+func (s *Server) storageInfo() map[string]any {
+	return map[string]any{
+		"env_root":        s.User.EnvRoot,
+		"attachment_root": s.User.AttachmentRoot,
+		"script_root":     s.User.ScriptRoot,
+		"screenshot_root": s.User.ShotRoot,
+		"data_root":       filepath.Join(s.User.Home, "data"),
+	}
+}
+
+func (s *Server) handleStorageGet(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.storageInfo())
+}
+
+func (s *Server) handleStoragePut(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		EnvRoot        string `json:"env_root"`
+		AttachmentRoot string `json:"attachment_root"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if err := s.User.SetStorage(in.EnvRoot, in.AttachmentRoot); err != nil {
+		writeError(w, http.StatusBadRequest, "storage_update_failed", err.Error())
+		return
+	}
+	s.Manager.SetUser(s.User)
+	s.Attachments.SetRoot(s.User.AttachmentRoot)
+	writeJSON(w, http.StatusOK, s.storageInfo())
+}
+
+// ---- environment export / import ----
+
+func (s *Server) handleEnvExport(w http.ResponseWriter, r *http.Request) {
+	meta, dir, ok := s.findEnv(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "environment not found")
+		return
+	}
+	if r.URL.Query().Get("close") == "1" {
+		s.Manager.CloseEnv(meta.ID)
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", envdir.Sanitize(meta.ID)+".tar.gz"))
+	if err := envdir.Export(w, dir); err != nil {
+		fmt.Fprintf(os.Stderr, "env export %s: %v\n", meta.ID, err)
+	}
+}
+
+func (s *Server) handleEnvImport(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<30)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_upload", err.Error())
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_upload", "file field is required")
+		return
+	}
+	defer file.Close()
+	meta, dir, err := envdir.Import(s.User.EnvRoot, file)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "env_import_failed", err.Error())
+		return
+	}
+	_ = s.Registry.Put(meta)
+	writeJSON(w, http.StatusCreated, map[string]any{"env": meta, "dir": dir})
+}
+
+// ---- attachments ----
+
+const maxAttachmentSize = 512 << 20
+
+func (s *Server) handleAttachmentList(w http.ResponseWriter, _ *http.Request) {
+	list, err := s.Attachments.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "attachment_list_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"attachments": list, "root": s.Attachments.Root()})
+}
+
+func (s *Server) handleAttachmentAdd(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAttachmentSize+(1<<20))
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_upload", err.Error())
+		return
+	}
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_upload", "file field is required")
+		return
+	}
+	defer file.Close()
+	name := r.FormValue("name")
+	if name == "" && hdr != nil {
+		name = hdr.Filename
+	}
+	saved, err := s.Attachments.Save(name, file, maxAttachmentSize)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "attachment_save_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, saved)
+}
+
+func (s *Server) handleAttachmentGet(w http.ResponseWriter, r *http.Request) {
+	f, err := s.Attachments.Get(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "attachment_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
+}
+
+func (s *Server) handleAttachmentRename(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	f, err := s.Attachments.Rename(r.PathValue("id"), in.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "attachment_rename_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
+}
+
+func (s *Server) handleAttachmentDownload(w http.ResponseWriter, r *http.Request) {
+	f, err := s.Attachments.Get(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "attachment_not_found", err.Error())
+		return
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", f.Name))
+	if f.MIME != "" {
+		w.Header().Set("Content-Type", f.MIME)
+	}
+	http.ServeFile(w, r, f.Path)
+}
+
+func (s *Server) handleAttachmentDelete(w http.ResponseWriter, r *http.Request) {
+	if err := s.Attachments.Delete(r.PathValue("id")); err != nil {
+		writeError(w, http.StatusNotFound, "attachment_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+// ---- auth (cookies + user agent) ----
+
+type AuthCookie struct {
+	Name     string  `json:"name"`
+	Value    string  `json:"value"`
+	Domain   string  `json:"domain,omitempty"`
+	Path     string  `json:"path,omitempty"`
+	URL      string  `json:"url,omitempty"`
+	Secure   bool    `json:"secure,omitempty"`
+	HTTPOnly bool    `json:"httpOnly,omitempty"`
+	SameSite string  `json:"sameSite,omitempty"`
+	Expires  float64 `json:"expires,omitempty"`
+}
+
+type AuthState struct {
+	UserAgent      string       `json:"user_agent"`
+	AcceptLanguage string       `json:"accept_language,omitempty"`
+	Platform       string       `json:"platform,omitempty"`
+	URL            string       `json:"url,omitempty"`
+	Title          string       `json:"title,omitempty"`
+	Cookies        []AuthCookie `json:"cookies"`
+	ExportedAt     string       `json:"exported_at,omitempty"`
+}
+
+func (s *Server) buildAuthState(sess *session.Session) (AuthState, error) {
+	st := AuthState{Cookies: []AuthCookie{}}
+	err := sess.Do(func(ctx context.Context) error {
+		st.URL, _ = browser.Location(ctx)
+		st.Title, _ = browser.Title(ctx)
+		if v, e := browser.Eval(ctx, "navigator.userAgent"); e == nil {
+			if str, ok := v.(string); ok {
+				st.UserAgent = str
+			}
+		}
+		if v, e := browser.Eval(ctx, "navigator.language"); e == nil {
+			if str, ok := v.(string); ok {
+				st.AcceptLanguage = str
+			}
+		}
+		if v, e := browser.Eval(ctx, "navigator.platform"); e == nil {
+			if str, ok := v.(string); ok {
+				st.Platform = str
+			}
+		}
+		cookies, e := browser.GetCookies(ctx, nil)
+		if e != nil {
+			return e
+		}
+		for _, c := range cookies {
+			st.Cookies = append(st.Cookies, AuthCookie{
+				Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path,
+				Secure: c.Secure, HTTPOnly: c.HTTPOnly, SameSite: string(c.SameSite),
+				Expires: float64(c.Expires),
+			})
+		}
+		return nil
+	})
+	st.ExportedAt = time.Now().Format(time.RFC3339)
+	return st, err
+}
+
+func (s *Server) applyAuthState(sess *session.Session, st AuthState) error {
+	return sess.Do(func(ctx context.Context) error {
+		if st.UserAgent != "" {
+			if err := browser.SetUserAgent(ctx, st.UserAgent, st.AcceptLanguage, st.Platform); err != nil {
+				return err
+			}
+		}
+		if len(st.Cookies) == 0 {
+			return nil
+		}
+		current, _ := browser.Location(ctx)
+		params := make([]*network.CookieParam, 0, len(st.Cookies))
+		for _, c := range st.Cookies {
+			if c.Name == "" {
+				continue
+			}
+			p := &network.CookieParam{
+				Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path, URL: c.URL,
+				Secure: c.Secure, HTTPOnly: c.HTTPOnly,
+				SameSite: network.CookieSameSite(c.SameSite),
+			}
+			if c.Expires > 0 {
+				p.Expires = cdp.TimeSinceEpoch(c.Expires)
+			}
+			if p.URL == "" && p.Domain == "" {
+				p.URL = current
+			}
+			params = append(params, p)
+		}
+		if len(params) == 0 {
+			return nil
+		}
+		return browser.SetCookies(ctx, params)
+	})
+}
+
+func (s *Server) handleAuthGet(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	st, err := s.buildAuthState(sess)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "auth_export_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleAuthExport(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	st, err := s.buildAuthState(sess)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "auth_export_failed", err.Error())
+		return
+	}
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "auth-"+sess.ID+".json"))
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleAuthSet(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	var st AuthState
+	if !decode(w, r, &st) {
+		return
+	}
+	if err := s.applyAuthState(sess, st); err != nil {
+		writeError(w, http.StatusBadGateway, "auth_import_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAuthImport(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_upload", err.Error())
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_upload", "file field is required")
+		return
+	}
+	defer file.Close()
+	var st AuthState
+	if err := json.NewDecoder(file).Decode(&st); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if err := s.applyAuthState(sess, st); err != nil {
+		writeError(w, http.StatusBadGateway, "auth_import_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

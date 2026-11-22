@@ -63,23 +63,40 @@ func Name(platform, id string) string {
 	return p + "-" + Sanitize(id)
 }
 
-// Create makes the environment directory and writes its metadata file.
+// Create makes the environment directory under root and writes its metadata.
 func Create(root, platform, id string, fp fingerprint.Profile) (string, error) {
-	if strings.TrimSpace(id) == "" {
-		return "", fmt.Errorf("empty environment id")
-	}
 	dir := filepath.Join(root, Name(platform, id))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if _, err := CreateAt(dir, platform, id, fp); err != nil {
 		return "", err
 	}
-	meta := Meta{ID: id, Platform: platform, Dir: dir, CreatedAt: time.Now().Format(time.RFC3339), Fingerprint: fp}
-	if _, err := os.Stat(filepath.Join(dir, MetaFile)); err != nil {
-		b, _ := json.MarshalIndent(meta, "", "  ")
-		if err := os.WriteFile(filepath.Join(dir, MetaFile), b, 0o600); err != nil {
-			return "", err
-		}
-	}
 	return dir, nil
+}
+
+// CreateAt makes an environment at an explicit directory.
+func CreateAt(dir, platform, id string, fp fingerprint.Profile) (Meta, error) {
+	if strings.TrimSpace(id) == "" {
+		return Meta{}, fmt.Errorf("empty environment id")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Meta{}, err
+	}
+	if meta, ok := ReadMeta(dir); ok {
+		return meta, nil
+	}
+	meta := Meta{ID: id, Platform: platform, Dir: dir, CreatedAt: time.Now().Format(time.RFC3339), Fingerprint: fp}
+	if err := writeMeta(dir, meta); err != nil {
+		return Meta{}, err
+	}
+	return meta, nil
+}
+
+func writeMeta(dir string, meta Meta) error {
+	meta.Dir = dir
+	b, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, MetaFile), b, 0o600)
 }
 
 // Ensure makes sure an existing environment directory has metadata.
@@ -91,9 +108,7 @@ func Ensure(dir string, meta Meta) error {
 	if _, err := os.Stat(p); err == nil {
 		return nil
 	}
-	meta.Dir = dir
-	b, _ := json.MarshalIndent(meta, "", "  ")
-	return os.WriteFile(p, b, 0o600)
+	return writeMeta(dir, meta)
 }
 
 // ReadMeta loads env.json if present.
@@ -154,17 +169,26 @@ func SetProxy(root, id, proxyID, proxyURL string) (Meta, error) {
 	if !withinRoot(root, dir) {
 		return Meta{}, fmt.Errorf("refusing to write %q outside %q", dir, root)
 	}
+	return SetProxyDir(dir, meta, proxyID, proxyURL)
+}
+
+// SetProxyDir writes a proxy binding to an explicit environment directory.
+func SetProxyDir(dir string, meta Meta, proxyID, proxyURL string) (Meta, error) {
 	meta.ProxyID = proxyID
 	meta.Proxy = proxyURL
-	meta.Dir = dir
-	b, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return Meta{}, err
-	}
-	if err := os.WriteFile(filepath.Join(dir, MetaFile), b, 0o600); err != nil {
+	if err := writeMeta(dir, meta); err != nil {
 		return Meta{}, err
 	}
 	return meta, nil
+}
+
+// RemoveDir deletes an environment directory recorded in the registry.
+func RemoveDir(dir string) error {
+	clean := filepath.Clean(dir)
+	if clean == "" || clean == "." || clean == string(os.PathSeparator) {
+		return fmt.Errorf("refusing to remove %q", dir)
+	}
+	return os.RemoveAll(clean)
 }
 
 // Delete removes an environment directory.
