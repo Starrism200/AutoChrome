@@ -1380,7 +1380,7 @@ func (s *Server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	vncURL := ""
 	if s.Desktop != nil {
 		vt := s.newVNCToken(s.Desktop.Info().WebPort)
-		vncURL = scheme + "://" + host + "/vnc/" + vt + "/vnc.html?autoconnect=1&resize=scale&reconnect=1"
+		vncURL = scheme + "://" + host + "/vnc/" + vt + "/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=vnc/" + vt + "/websockify"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id":     sess.ID,
@@ -1525,7 +1525,7 @@ func (s *Server) handleInteractionVNC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := s.newVNCToken(s.Desktop.Info().WebPort)
-	http.Redirect(w, r, "/vnc/"+token+"/vnc.html?autoconnect=1&resize=scale&reconnect=1", http.StatusFound)
+	http.Redirect(w, r, "/vnc/"+token+"/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=vnc/"+token+"/websockify", http.StatusFound)
 }
 
 func (s *Server) handleInteractionCode(w http.ResponseWriter, r *http.Request) {
@@ -1990,7 +1990,7 @@ func (s *Server) handleBrowserAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vt := s.newVNCToken(s.Desktop.Info().WebPort)
-	http.Redirect(w, r, "/vnc/"+vt+"/vnc.html?autoconnect=1&resize=scale&reconnect=1", http.StatusFound)
+	http.Redirect(w, r, "/vnc/"+vt+"/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=vnc/"+vt+"/websockify", http.StatusFound)
 }
 
 // ---- helpers ----

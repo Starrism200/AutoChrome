@@ -63,6 +63,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 - x11vnc/noVNC 仍只监听 `127.0.0.1`
 - token 默认 **300 秒无动作自动失效并断开**
 - 可用 `AUTOCHROME_VNC_IDLE_SECONDS` 调整空闲时间
+- API 生成的 URL 会带 `path=vnc/<token>/websockify`，不要手动删掉；noVNC 默认会连到根路径 `/websockify`，删掉后页面能打开但会提示“无法连接到服务器”
 - 建议 API 放在 TLS 反向代理后面；`--addr 0.0.0.0:8787` 或反向代理到本机
 
 ## 3. 独立 desktop 服务

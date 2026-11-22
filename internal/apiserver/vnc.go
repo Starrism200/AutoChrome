@@ -115,7 +115,7 @@ func (s *Server) handleDesktopToken(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = s.Addr
 	}
-	page := scheme + "://" + host + "/vnc/" + token + "/vnc.html?autoconnect=1&resize=scale&reconnect=1"
+	page := scheme + "://" + host + "/vnc/" + token + "/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=vnc/" + token + "/websockify"
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":                token,
 		"url":                  page,
@@ -132,7 +132,16 @@ func (s *Server) handleVNC(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/vnc/"+token)
 	rest = strings.TrimPrefix(rest, "/")
 	if rest == "" {
-		http.Redirect(w, r, "/vnc/"+token+"/vnc.html?autoconnect=1&resize=scale&reconnect=1", http.StatusFound)
+		http.Redirect(w, r, "/vnc/"+token+"/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=vnc/"+token+"/websockify", http.StatusFound)
+		return
+	}
+	if rest == "vnc.html" && r.URL.Query().Get("path") == "" {
+		q := r.URL.RawQuery
+		if q != "" {
+			q += "&"
+		}
+		q += "path=vnc/" + token + "/websockify"
+		http.Redirect(w, r, "/vnc/"+token+"/vnc.html?"+q, http.StatusFound)
 		return
 	}
 	if isWebSocketUpgrade(r) {
