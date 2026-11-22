@@ -1,9 +1,10 @@
 # AutoChrome
 
-[English](README.md) | 简体中文
-
 浏览器 + 虚拟显示器（Xvfb）工具集：为每个环境生成独立的 Chrome profile 和
-确定性指纹，并在没有物理显示器时通过 Xvfb 启动有头 Chrome。
+确定性指纹，并提供内置 JavaScript 脚本 SDK 与 MCP 服务器，方便 AI 驱动 Chrome
+或生成自动化脚本。
+
+[English](README.md) | 简体中文
 
 ## 功能
 
@@ -14,12 +15,15 @@
 - 在没有物理显示器时自动用 `xvfb-run` 启动有头 Chrome
 - 支持按环境绑定代理
 - 跨进程浏览器并发上限（`flock` 槽位）
-- 提供 CDP 常用能力：截图、Cookie 导出、等待元素、真实键盘事件等
+- 内置同步 JavaScript SDK（`ac` / `page`），无需 Node.js
+- stdio MCP 服务器，提供浏览器工具与资源
+- 多用户隔离（L2：每用户一个 MCP 进程和独立目录树）
+- CDP 能力：带元素引用的快照、截图、Cookie、真实键盘事件
 
 ## 依赖
 
 - Linux
-- Go 1.25+（可用 `GO_BIN` 指定工具链）
+- Go 1.26+（可用 `GO_BIN` 指定工具链）
 - Google Chrome
 - `xvfb`
 - `fonts-liberation`
@@ -50,81 +54,120 @@ build
 go build -o bin/autochrome ./cmd/autochrome
 ```
 
-## 使用
-
-### 生成浏览器环境
+## 快速开始
 
 ```bash
-./bin/autochrome gen -id account-01 -root profiles
-```
+sudo ./install.sh
 
-输出：
-
-```text
-env_dir=profiles/default-account-01
-fingerprint={"user_agent":"...","timezone":"Europe/Paris",...}
-```
-
-目录结构：
-
-```text
-profiles/default-account-01/
-├── env.json        # id、platform、创建时间、指纹
-└── ...             # Chrome --user-data-dir 内容（首次启动后生成）
-```
-
-### 查看指纹
-
-```bash
-./bin/autochrome fingerprint -id account-01
-```
-
-同一 `-id` 始终得到同一份指纹。
-
-### 启动浏览器（虚拟显示器）
-
-```bash
+./bin/autochrome gen -id account-01
 ./bin/autochrome open -id account-01 -url https://example.com
 ```
 
-- 没有 `DISPLAY` 时会自动用 `xvfb-run` 包裹自己，屏幕 `1366x900x24`
-- 默认在 Xvfb 中运行**有头** Chrome
-- `-keep` 保持浏览器打开，按 Ctrl+C 关闭
-- `-screenshot out.png` 启动后截图
-- `-proxy socks5://127.0.0.1:10801` 绑定代理
-- `-headless` 使用 Chrome headless 模式
-- `-chrome /usr/bin/google-chrome` 指定 Chrome 路径
-- `-slot-dir` / `-slot-max` 控制并发槽位（也可用环境变量
-  `AUTOCHROME_SLOT_DIR` / `AUTOCHROME_BROWSER_MAX`）
-
-示例：
+`gen` 会创建 `profiles/default-account-01/` 并写入 `env.json` 指纹。
+`open` 在 Xvfb 中启动有头 Chrome，可同时截图：
 
 ```bash
-./bin/autochrome open \
-  -id account-01 \
-  -url https://example.com \
-  -proxy socks5://127.0.0.1:10801 \
-  -screenshot data/shot.png \
-  -keep
+./bin/autochrome open -id account-01 -url https://example.com \
+  -screenshot shot.png -keep
 ```
+
+## 多用户
+
+`default` 用户保留历史布局；其它用户位于 `data/users/<id>/`，拥有独立的
+profiles、脚本、截图、日志和浏览器槽位。
+
+```bash
+./bin/autochrome user add alice --allow-eval --allow-scripts --max-browsers 2
+./bin/autochrome user list
+./bin/autochrome user show alice
+
+./bin/autochrome gen -user alice -id account-01
+```
+
+优先级：`-user` > `AUTOCHROME_USER` > `default`。
+详见 [docs/MULTIUSER.md](docs/MULTIUSER.md)。
+
+## JavaScript 脚本
+
+脚本是同步 JavaScript，在嵌入式运行时中执行，接收 `input`、`ac`、`console`，
+用 `return` 返回 JSON 可序列化的值。
+
+```bash
+./bin/autochrome script list
+./bin/autochrome script run example -input '{"url":"https://example.com"}'
+```
+
+示例 `scripts/custom/example.js`：
+
+```js
+const page = ac.open({
+  env: input.env || "example",
+  url: input.url || "https://example.com",
+});
+
+const snap = page.snapshot({ max: 50 });
+const title = page.title();
+page.screenshot({ path: "example.png", fullPage: true });
+page.close();
+
+return { title, nodes: snap.nodes.length };
+```
+
+完整 API 和给 AI 的提示词模板见 [docs/SCRIPT_SDK.md](docs/SCRIPT_SDK.md)。
+
+## MCP 服务器
+
+```bash
+./bin/autochrome mcp -user alice
+```
+
+客户端配置：
+
+```json
+{
+  "mcpServers": {
+    "autochrome": {
+      "command": "/path/to/AutoChrome/bin/autochrome",
+      "args": ["mcp", "-user", "alice"],
+      "env": {
+        "AUTOCHROME_HOME": "/path/to/AutoChrome"
+      }
+    }
+  }
+}
+```
+
+服务器提供环境、会话、导航、快照、点击、输入、等待、截图、Cookie、eval 和
+脚本工具，以及 `autochrome://envs`、`autochrome://sessions` 资源。
+详见 [docs/MCP.md](docs/MCP.md)。
 
 ## 目录结构
 
 ```text
-cmd/autochrome/        命令行入口：gen / fingerprint / open
-internal/browser/      Chrome 启动、CDP 操作、截图、Cookie、UI 辅助
+cmd/autochrome/        命令行入口：gen / open / user / script / mcp
+internal/browser/      Chrome 启动、CDP 操作、快照、截图
 internal/browserexec/  在 DISPLAY 或 xvfb-run 下启动子进程
 internal/browserslot/  跨进程浏览器并发槽位
 internal/envdir/       环境目录与元数据
 internal/fingerprint/  确定性浏览器指纹生成
+internal/users/        用户目录、配额与权限
+internal/session/      长生命周期浏览器会话
+internal/jsruntime/    嵌入式 JavaScript SDK（goja）
+internal/scripts/      脚本发现与 manifest
+internal/mcpserver/    MCP stdio 服务器
+internal/xvfb/         共享虚拟显示器
 internal/ua/           UA 常量
 scripts/common.sh      GO_BIN / CHROME / 构建 / xvfb_run
+scripts/custom/        示例用户脚本
 install.sh             系统依赖 + Chrome + 构建
 update.sh              升级 + 重新构建
-docs/                  安装与浏览器技术说明
+docs/                  安装、浏览器、SDK、MCP 与多用户文档
 ```
 
 ## 文档
 
 - [docs/INSTALL.md](docs/INSTALL.md)：安装、更新、依赖排查
 - [docs/BROWSER.md](docs/BROWSER.md)：虚拟显示器、指纹、启动参数、并发与代理
+- [docs/SCRIPT_SDK.md](docs/SCRIPT_SDK.md)：JavaScript 脚本 API 与 AI 提示词
+- [docs/MCP.md](docs/MCP.md)：MCP 工具、资源与客户端配置
+- [docs/MULTIUSER.md](docs/MULTIUSER.md)：多用户模型、目录与权限

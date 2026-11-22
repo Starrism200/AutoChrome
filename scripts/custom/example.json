@@ -1,0 +1,11 @@
+{
+  "description": "Open a page, snapshot it and save a screenshot",
+  "timeout": "60s",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "url": { "type": "string", "description": "page to open" },
+      "env": { "type": "string", "description": "environment id" }
+    }
+  }
+}

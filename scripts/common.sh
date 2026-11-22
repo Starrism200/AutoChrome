@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 go_ok() {
-  "$1" version 2>/dev/null | grep -qE 'go1\.(2[5-9]|[3-9][0-9])'
+  "$1" version 2>/dev/null | grep -qE 'go1\.(2[6-9]|[3-9][0-9])'
 }
 
 if [ -z "${GO_BIN:-}" ]; then

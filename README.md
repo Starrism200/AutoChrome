@@ -3,6 +3,9 @@
 A small toolkit for running Google Chrome on a virtual display (Xvfb) with
 self-contained, per-environment profiles and deterministic browser fingerprints.
 
+It also ships a synchronous JavaScript SDK and a Model Context Protocol (MCP)
+server so AI clients can drive Chrome or run generated scripts.
+
 English | [简体中文](README.zh-CN.md)
 
 ## Features
@@ -15,12 +18,15 @@ English | [简体中文](README.zh-CN.md)
 - Launch headed Chrome through `xvfb-run` when no display is available
 - Optional per-environment proxy
 - Cross-process browser concurrency limit using `flock` slots
-- CDP helpers: screenshots, cookie export, element waits and trusted keyboard events
+- Embedded JavaScript script SDK (`ac` / `page`) without a Node.js dependency
+- MCP stdio server with browser tools and resources
+- Multi-user isolation (L2: one MCP process and one directory tree per user)
+- CDP helpers: snapshots with element refs, screenshots, cookies, trusted keys
 
 ## Requirements
 
 - Linux
-- Go 1.25+ (`GO_BIN` can point at a specific toolchain)
+- Go 1.26+ (`GO_BIN` can point at a specific toolchain)
 - Google Chrome
 - `xvfb`
 - `fonts-liberation`
@@ -52,81 +58,122 @@ build
 go build -o bin/autochrome ./cmd/autochrome
 ```
 
-## Usage
-
-### Create an environment
+## Quick start
 
 ```bash
-./bin/autochrome gen -id account-01 -root profiles
-```
+sudo ./install.sh
 
-Output:
-
-```text
-env_dir=profiles/default-account-01
-fingerprint={"user_agent":"...","timezone":"Europe/Paris",...}
-```
-
-Layout:
-
-```text
-profiles/default-account-01/
-├── env.json        # id, platform, creation time and fingerprint
-└── ...             # Chrome --user-data-dir contents (created on first launch)
-```
-
-### Print a fingerprint
-
-```bash
-./bin/autochrome fingerprint -id account-01
-```
-
-The same `-id` always produces the same fingerprint.
-
-### Launch the browser
-
-```bash
+./bin/autochrome gen -id account-01
 ./bin/autochrome open -id account-01 -url https://example.com
 ```
 
-- Uses `xvfb-run` automatically when `DISPLAY` is not set (`1366x900x24`)
-- Runs headed Chrome inside Xvfb by default
-- `-keep` keeps the browser open until Ctrl+C
-- `-screenshot out.png` captures a screenshot after launch
-- `-proxy socks5://127.0.0.1:10801` binds a proxy
-- `-headless` uses Chrome headless mode
-- `-chrome /usr/bin/google-chrome` sets the Chrome binary
-- `-slot-dir` / `-slot-max` control concurrency slots (or use
-  `AUTOCHROME_SLOT_DIR` / `AUTOCHROME_BROWSER_MAX`)
-
-Example:
+`gen` creates `profiles/default-account-01/` with an `env.json` fingerprint.
+`open` launches headed Chrome on Xvfb and can save a screenshot:
 
 ```bash
-./bin/autochrome open \
-  -id account-01 \
-  -url https://example.com \
-  -proxy socks5://127.0.0.1:10801 \
-  -screenshot data/shot.png \
-  -keep
+./bin/autochrome open -id account-01 -url https://example.com \
+  -screenshot shot.png -keep
 ```
+
+## Users
+
+The `default` user keeps the historical layout. Other users live under
+`data/users/<id>/` with their own profiles, scripts, screenshots, logs and
+browser slots.
+
+```bash
+./bin/autochrome user add alice --allow-eval --allow-scripts --max-browsers 2
+./bin/autochrome user list
+./bin/autochrome user show alice
+
+./bin/autochrome gen -user alice -id account-01
+```
+
+Resolution order: `-user` > `AUTOCHROME_USER` > `default`.
+See [docs/MULTIUSER.md](docs/MULTIUSER.md).
+
+## JavaScript scripts
+
+Scripts are synchronous JavaScript run in an embedded runtime. They receive
+`input`, `ac` and `console`, and return JSON-serializable values.
+
+```bash
+./bin/autochrome script list
+./bin/autochrome script run example -input '{"url":"https://example.com"}'
+```
+
+Example `scripts/custom/example.js`:
+
+```js
+const page = ac.open({
+  env: input.env || "example",
+  url: input.url || "https://example.com",
+});
+
+const snap = page.snapshot({ max: 50 });
+const title = page.title();
+page.screenshot({ path: "example.png", fullPage: true });
+page.close();
+
+return { title, nodes: snap.nodes.length };
+```
+
+Full API and an AI prompt template: [docs/SCRIPT_SDK.md](docs/SCRIPT_SDK.md).
+
+## MCP server
+
+```bash
+./bin/autochrome mcp -user alice
+```
+
+Client configuration:
+
+```json
+{
+  "mcpServers": {
+    "autochrome": {
+      "command": "/path/to/AutoChrome/bin/autochrome",
+      "args": ["mcp", "-user", "alice"],
+      "env": {
+        "AUTOCHROME_HOME": "/path/to/AutoChrome"
+      }
+    }
+  }
+}
+```
+
+The server exposes environment, session, navigation, snapshot, click, type,
+wait, screenshot, cookie, eval and script tools, plus `autochrome://envs` and
+`autochrome://sessions` resources.
+See [docs/MCP.md](docs/MCP.md).
 
 ## Layout
 
 ```text
-cmd/autochrome/        CLI: gen / fingerprint / open
-internal/browser/      Chrome launch, CDP operations, screenshots, cookies, UI helpers
+cmd/autochrome/        CLI: gen / open / user / script / mcp
+internal/browser/      Chrome launch, CDP operations, snapshots, screenshots
 internal/browserexec/  Start child processes under DISPLAY or xvfb-run
 internal/browserslot/  Cross-process browser concurrency slots
 internal/envdir/       Environment directories and metadata
 internal/fingerprint/  Deterministic fingerprint generation
+internal/users/        Per-user directories, quotas and permissions
+internal/session/      Long-lived browser sessions
+internal/jsruntime/    Embedded JavaScript SDK (goja)
+internal/scripts/      Script discovery and manifests
+internal/mcpserver/    MCP stdio server
+internal/xvfb/         Shared virtual display
 internal/ua/           User-agent constants
 scripts/common.sh      GO_BIN / CHROME / build / xvfb_run
+scripts/custom/        Example user scripts
 install.sh             System packages + Chrome + build
 update.sh              Upgrade + rebuild
-docs/                  Installation and browser notes
+docs/                  Installation, browser, SDK, MCP and multi-user notes
 ```
 
 ## Documentation
 
 - [docs/INSTALL.md](docs/INSTALL.md) (Chinese)
 - [docs/BROWSER.md](docs/BROWSER.md) (Chinese)
+- [docs/SCRIPT_SDK.md](docs/SCRIPT_SDK.md) (Chinese)
+- [docs/MCP.md](docs/MCP.md) (Chinese)
+- [docs/MULTIUSER.md](docs/MULTIUSER.md) (Chinese)

@@ -34,6 +34,7 @@ type Options struct {
 	SlotDir     string
 	SlotMax     int
 	SlotWait    time.Duration
+	Env         []string
 }
 
 // Launch starts a browser for one account and returns its context plus a
@@ -50,7 +51,7 @@ func Launch(opts Options) (context.Context, func(), error) {
 			_ = os.Remove(filepath.Join(opts.ProfileDir, name))
 		}
 	}
-	if opts.Timeout <= 0 {
+	if opts.Timeout == 0 {
 		opts.Timeout = 180 * time.Second
 	}
 	fp := fingerprint.Profile{}
@@ -113,12 +114,21 @@ func Launch(opts Options) (context.Context, func(), error) {
 	if opts.ProxyAddr != "" {
 		allocOpts = append(allocOpts, chromedp.Flag("proxy-server", opts.ProxyAddr))
 	}
+	if len(opts.Env) > 0 {
+		allocOpts = append(allocOpts, chromedp.Env(opts.Env...))
+	}
 	if opts.Headless {
 		allocOpts = append(allocOpts, chromedp.Flag("headless", "new"))
 	}
 
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), allocOpts...)
-	baseCtx, cancelBase := context.WithTimeout(allocCtx, opts.Timeout)
+	var baseCtx context.Context
+	var cancelBase context.CancelFunc
+	if opts.Timeout < 0 {
+		baseCtx, cancelBase = context.WithCancel(allocCtx)
+	} else {
+		baseCtx, cancelBase = context.WithTimeout(allocCtx, opts.Timeout)
+	}
 	ctx, cancelTab := chromedp.NewContext(baseCtx)
 	cleanup := func() {
 		cancelTab()

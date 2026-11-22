@@ -1,0 +1,267 @@
+// Package session owns long-lived browser sessions for the MCP server and the
+// script runner. Each session keeps one Chrome process and profile alive
+// across many tool calls.
+package session
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"sync"
+	"time"
+
+	"autochrome/internal/browser"
+	"autochrome/internal/envdir"
+	"autochrome/internal/fingerprint"
+	"autochrome/internal/users"
+	"autochrome/internal/xvfb"
+)
+
+// Info is a serializable session summary.
+type Info struct {
+	ID        string `json:"id"`
+	EnvID     string `json:"env_id"`
+	Platform  string `json:"platform"`
+	URL       string `json:"url,omitempty"`
+	Proxy     string `json:"proxy,omitempty"`
+	Headless  bool   `json:"headless"`
+	CreatedAt string `json:"created_at"`
+}
+
+// Session is one live Chrome process.
+type Session struct {
+	ID         string
+	EnvID      string
+	Platform   string
+	ProfileDir string
+	Proxy      string
+	Headless   bool
+	CreatedAt  time.Time
+
+	manager *Manager
+	ctx     context.Context
+	cleanup func()
+	once    sync.Once
+	mu      sync.Mutex
+	lastURL string
+}
+
+// Manager creates, stores and closes sessions for one user.
+type Manager struct {
+	user   users.User
+	chrome string
+
+	mu       sync.Mutex
+	sessions map[string]*Session
+	display  *xvfb.Display
+}
+
+// NewManager returns a manager bound to one user.
+func NewManager(user users.User, chrome string) *Manager {
+	if chrome == "" {
+		chrome = "/usr/bin/google-chrome"
+	}
+	return &Manager{user: user, chrome: chrome, sessions: map[string]*Session{}}
+}
+
+// User returns the owner of this manager.
+func (m *Manager) User() users.User { return m.user }
+
+// Display starts (once) and returns the shared virtual display.
+func (m *Manager) Display() (*xvfb.Display, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.display != nil {
+		return m.display, nil
+	}
+	d, err := xvfb.Start("1366x900x24")
+	if err != nil {
+		return nil, err
+	}
+	m.display = d
+	return d, nil
+}
+
+// Open launches a browser for envID and returns a stored session.
+func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Session, error) {
+	if envID == "" {
+		return nil, fmt.Errorf("env id is required")
+	}
+	if platform == "" {
+		platform = "default"
+	}
+	dir := filepath.Join(m.user.EnvRoot, envdir.Name(platform, envID))
+	fp := fingerprint.Generate(envID)
+	if meta, ok := envdir.ReadMeta(dir); ok && meta.Fingerprint.UserAgent != "" {
+		fp = meta.Fingerprint
+	} else if _, err := envdir.Create(m.user.EnvRoot, platform, envID, fp); err != nil {
+		return nil, err
+	}
+	if proxy == "" {
+		proxy = m.user.DefaultProxy
+	}
+
+	var env []string
+	if !headless {
+		d, err := m.Display()
+		if err != nil {
+			return nil, err
+		}
+		env = d.Env()
+	}
+
+	ctx, cleanup, err := browser.Launch(browser.Options{
+		ChromePath:  m.chrome,
+		ProfileDir:  dir,
+		ProxyAddr:   proxy,
+		Headless:    headless,
+		Timeout:     -1,
+		Fingerprint: &fp,
+		SlotDir:     m.user.SlotDir,
+		SlotMax:     m.user.BrowserMax(),
+		Env:         env,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	s := &Session{
+		ID:         newID(),
+		EnvID:      envID,
+		Platform:   platform,
+		ProfileDir: dir,
+		Proxy:      proxy,
+		Headless:   headless,
+		CreatedAt:  time.Now(),
+		manager:    m,
+		ctx:        ctx,
+		cleanup:    cleanup,
+	}
+
+	m.mu.Lock()
+	m.sessions[s.ID] = s
+	m.mu.Unlock()
+
+	if url != "" {
+		if err := s.Do(func(ctx context.Context) error {
+			return browser.Navigate(ctx, url)
+		}); err != nil {
+			_ = m.Close(s.ID)
+			return nil, err
+		}
+		s.SetURL(url)
+	}
+	return s, nil
+}
+
+// Get returns a session by id.
+func (m *Manager) Get(id string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return nil, fmt.Errorf("session %q not found", id)
+	}
+	return s, nil
+}
+
+// Close closes one session.
+func (m *Manager) Close(id string) error {
+	m.mu.Lock()
+	s, ok := m.sessions[id]
+	if ok {
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("session %q not found", id)
+	}
+	s.close()
+	return nil
+}
+
+// CloseAll closes every session and the shared display.
+func (m *Manager) CloseAll() {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.sessions = map[string]*Session{}
+	m.mu.Unlock()
+	for _, s := range sessions {
+		s.close()
+	}
+	m.mu.Lock()
+	if m.display != nil {
+		_ = m.display.Close()
+		m.display = nil
+	}
+	m.mu.Unlock()
+}
+
+// List returns session summaries sorted by creation time.
+func (m *Manager) List() []Info {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+	sort.Slice(sessions, func(i, j int) bool { return sessions[i].CreatedAt.Before(sessions[j].CreatedAt) })
+	out := make([]Info, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, s.Info())
+	}
+	return out
+}
+
+// Do runs fn while holding the session lock. Chrome/CDP actions on one tab are
+// serialized so concurrent tool calls cannot interleave.
+func (s *Session) Do(fn func(context.Context) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fn(s.ctx)
+}
+
+// Info returns a summary of the session.
+func (s *Session) Info() Info {
+	s.mu.Lock()
+	url := s.lastURL
+	s.mu.Unlock()
+	return Info{
+		ID:        s.ID,
+		EnvID:     s.EnvID,
+		Platform:  s.Platform,
+		URL:       url,
+		Proxy:     s.Proxy,
+		Headless:  s.Headless,
+		CreatedAt: s.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+// SetURL records the last known URL.
+func (s *Session) SetURL(url string) {
+	s.mu.Lock()
+	s.lastURL = url
+	s.mu.Unlock()
+}
+
+func (s *Session) close() {
+	s.once.Do(func() {
+		if s.cleanup != nil {
+			s.cleanup()
+		}
+	})
+}
+
+func newID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("s%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}

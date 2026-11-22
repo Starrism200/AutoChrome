@@ -37,7 +37,7 @@ fi
 
 if ! command -v "$GO_BIN" >/dev/null 2>&1; then
   echo "Go toolchain not found: $GO_BIN" >&2
-  echo "Install Go 1.25+ or set GO_BIN=/path/to/go" >&2
+  echo "Install Go 1.26+ or set GO_BIN=/path/to/go" >&2
   exit 1
 fi
 
