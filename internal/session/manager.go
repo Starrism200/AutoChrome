@@ -54,9 +54,10 @@ type Manager struct {
 	user   users.User
 	chrome string
 
-	mu       sync.Mutex
-	sessions map[string]*Session
-	display  *xvfb.Display
+	mu              sync.Mutex
+	sessions        map[string]*Session
+	display         *xvfb.Display
+	externalDisplay *xvfb.Display
 }
 
 // NewManager returns a manager bound to one user.
@@ -70,10 +71,21 @@ func NewManager(user users.User, chrome string) *Manager {
 // User returns the owner of this manager.
 func (m *Manager) User() users.User { return m.user }
 
+// SetDisplay makes the manager use a display owned by someone else (for
+// example the desktop/VNC service) instead of starting its own Xvfb.
+func (m *Manager) SetDisplay(d *xvfb.Display) {
+	m.mu.Lock()
+	m.externalDisplay = d
+	m.mu.Unlock()
+}
+
 // Display starts (once) and returns the shared virtual display.
 func (m *Manager) Display() (*xvfb.Display, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.externalDisplay != nil {
+		return m.externalDisplay, nil
+	}
 	if m.display != nil {
 		return m.display, nil
 	}

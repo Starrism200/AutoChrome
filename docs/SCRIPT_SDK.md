@@ -76,10 +76,14 @@ manifest：
 | `page.click(target)` | 点击 |
 | `page.type(target, text)` | 聚焦并输入 |
 | `page.press(key)` | 按键，如 `Enter`、`Tab`、`Escape` |
-| `page.wait({selector?, text?, timeout?})` | 等待选择器或文字，`timeout` 毫秒 |
+| `page.wait({selector?, hiddenSelector?, text?, urlContains?, cookie?, timeout?})` | 等待条件全部满足，`timeout` 毫秒 |
 | `page.eval(expression)` | 页面内执行 JS，自动 await Promise |
 | `page.screenshot({path?, fullPage?, inline?})` | 截图；相对路径在用户截图目录下 |
 | `page.cookies({urls?})` | 读取 Cookie |
+| `page.detectChallenge()` | 识别二维码 / OTP / 验证码 |
+| `page.qr()` | 截取二维码，返回 `{selector, name, base64}` |
+| `page.clickXY(x, y)` | 按视口坐标点击 |
+| `page.scroll(dx, dy)` | 滚动页面 |
 | `page.close()` | 关闭本次打开的会话 |
 
 ### target 形式
@@ -139,7 +143,30 @@ page.press, page.wait, page.eval, page.screenshot, page.cookies, page.close
 ./bin/autochrome script run <name> -input '<json>'
 ```
 
-## 8. 权限
+## 8. 交互处理示例
+
+```js
+const page = ac.open({ env: input.env, url: input.url });
+
+const challenges = page.detectChallenge();
+if (challenges.some((c) => c.type === "qr")) {
+  const qr = page.qr();
+  console.log("QR:", qr.selector, qr.base64.length);
+  // 真人在 noVNC 扫码，或把 base64 交给客户端展示
+}
+
+page.wait({
+  hiddenSelector: "[data-ac-challenge^='ac-qr']",
+  urlContains: "/home",
+  timeout: 180000,
+});
+
+return { url: page.url(), title: page.title() };
+```
+
+更多说明见 [INTERACTION.md](INTERACTION.md)。
+
+## 9. 权限
 
 - 用户的 `user.json` 中 `allow_eval` 控制 `page.eval`
 - `allow_scripts` 控制是否允许运行脚本

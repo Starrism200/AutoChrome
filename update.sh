@@ -21,7 +21,7 @@ if [ "${SKIP_SYSTEM:-0}" != "1" ]; then
 
   echo "==> updating system packages"
   apt-get update
-  apt-get install -y --only-upgrade xvfb fonts-liberation ca-certificates || true
+  apt-get install -y --only-upgrade xvfb fonts-liberation ca-certificates x11vnc novnc websockify || true
 
   echo "==> upgrading Google Chrome"
   tmp="$(mktemp -d)"

@@ -269,8 +269,16 @@ func (r *Runner) pageObject(vm *goja.Runtime, s *session.Session) *goja.Object {
 	_ = page.Set("wait", func(call goja.FunctionCall) goja.Value {
 		opts := objectArg(call, 0)
 		timeout := time.Duration(intOpt(opts, "timeout")) * time.Millisecond
+		waitOpts := browser.WaitOptions{
+			Selector:       stringOpt(opts, "selector"),
+			HiddenSelector: stringOpt(opts, "hiddenSelector", "hidden_selector"),
+			Text:           stringOpt(opts, "text"),
+			URLContains:    stringOpt(opts, "urlContains", "url_contains"),
+			CookieName:     stringOpt(opts, "cookie", "cookieName", "cookie_name"),
+			Timeout:        timeout,
+		}
 		if err := s.Do(func(ctx context.Context) error {
-			return browser.WaitFor(ctx, stringOpt(opts, "selector"), stringOpt(opts, "text"), timeout)
+			return browser.WaitForOptions(ctx, waitOpts)
 		}); err != nil {
 			panic(vm.NewGoError(err))
 		}
@@ -351,6 +359,53 @@ func (r *Runner) pageObject(vm *goja.Runtime, s *session.Session) *goja.Object {
 			panic(vm.NewGoError(err))
 		}
 		return vm.ToValue(cookies)
+	})
+
+	_ = page.Set("detectChallenge", func(call goja.FunctionCall) goja.Value {
+		var out []browser.ChallengeCandidate
+		if err := s.Do(func(ctx context.Context) error {
+			v, e := browser.DetectChallenges(ctx)
+			out = v
+			return e
+		}); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(out)
+	})
+
+	_ = page.Set("qr", func(call goja.FunctionCall) goja.Value {
+		var buf []byte
+		var cand browser.ChallengeCandidate
+		if err := s.Do(func(ctx context.Context) error {
+			b, c, e := browser.QRCodePNG(ctx)
+			buf, cand = b, c
+			return e
+		}); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(map[string]any{
+			"selector": cand.Selector,
+			"name":     cand.Name,
+			"base64":   base64.StdEncoding.EncodeToString(buf),
+		})
+	})
+
+	_ = page.Set("clickXY", func(call goja.FunctionCall) goja.Value {
+		x := call.Argument(0).ToFloat()
+		y := call.Argument(1).ToFloat()
+		if err := s.Do(func(ctx context.Context) error { return browser.ClickXY(ctx, x, y) }); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return goja.Undefined()
+	})
+
+	_ = page.Set("scroll", func(call goja.FunctionCall) goja.Value {
+		dx := int(call.Argument(0).ToInteger())
+		dy := int(call.Argument(1).ToInteger())
+		if err := s.Do(func(ctx context.Context) error { return browser.Scroll(ctx, dx, dy) }); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return goja.Undefined()
 	})
 
 	_ = page.Set("close", func(call goja.FunctionCall) goja.Value {

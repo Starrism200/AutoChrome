@@ -19,6 +19,9 @@ apt-get update
 
 packages=()
 command -v xvfb-run >/dev/null 2>&1 || packages+=(xvfb)
+command -v x11vnc >/dev/null 2>&1 || packages+=(x11vnc)
+command -v websockify >/dev/null 2>&1 || packages+=(websockify)
+[ -d /usr/share/novnc ] || packages+=(novnc)
 command -v curl >/dev/null 2>&1 || packages+=(curl)
 dpkg -s fonts-liberation >/dev/null 2>&1 || packages+=(fonts-liberation)
 dpkg -s ca-certificates >/dev/null 2>&1 || packages+=(ca-certificates)

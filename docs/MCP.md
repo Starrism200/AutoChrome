@@ -62,9 +62,17 @@ opencode / Claude Desktop / Cursor 等通用写法：
 | `browser_wait` | 等待选择器或文字 |
 | `browser_screenshot` | 截图，可内联返回 PNG |
 | `browser_cookies` | 读取 Cookie |
+| `browser_detect_challenge` | 识别二维码 / OTP / 验证码元素 |
+| `browser_qr` | 截取二维码并作为图片返回 |
+| `browser_click_xy` | 按视口坐标点击（图片验证码） |
+| `browser_scroll` | 滚动页面 |
+| `desktop_info` | 返回 noVNC 地址（启用 `--vnc` 时） |
 | `browser_eval` | 页面内执行 JS（需 `allow_eval`） |
 | `script_list` | 列出当前用户的 JS 脚本 |
 | `script_run` | 运行脚本（需 `allow_scripts`） |
+
+`browser_wait` 支持同时等待 `selector`、`hidden_selector`、`text`、
+`url_contains`、`cookie_name`，用于判断扫码/验证码是否完成。
 
 ### Resources
 
@@ -72,6 +80,7 @@ opencode / Claude Desktop / Cursor 等通用写法：
 |---|---|
 | `autochrome://envs` | 当前用户的环境列表（JSON） |
 | `autochrome://sessions` | 当前存活的会话（JSON） |
+| `autochrome://desktop` | noVNC 地址与端口（启用 VNC 时） |
 
 ## 4. 推荐调用顺序
 
@@ -104,7 +113,24 @@ JavaScript SDK（见 [SCRIPT_SDK.md](SCRIPT_SDK.md)）。
 如果传入 `session_id`，脚本内可通过 `input.session_id` 使用
 `ac.session(input.session_id)` 复用该会话。
 
-## 6. 权限
+## 6. 人工接管
+
+启动时加 `--vnc` 即可同时提供 noVNC：
+
+```bash
+./bin/autochrome mcp -user alice --vnc
+```
+
+AI 遇到二维码 / 短信验证码 / 图片验证码时，可以：
+
+1. `browser_detect_challenge` 识别类型；
+2. `browser_qr` 或 `browser_screenshot` 返回图片；
+3. `desktop_info` 返回 noVNC 地址，让用户直接接管；
+4. `browser_wait` 等待登录/验证完成。
+
+详见 [INTERACTION.md](INTERACTION.md) 和 [VNC.md](VNC.md)。
+
+## 7. 权限
 
 - `browser_eval` 仅在用户 `allow_eval=true` 或启动参数 `--allow-eval` 时注册
 - `script_list` / `script_run` 仅在 `allow_scripts=true` 或 `--allow-scripts` 时注册
@@ -116,7 +142,7 @@ JavaScript SDK（见 [SCRIPT_SDK.md](SCRIPT_SDK.md)）。
 
 默认用户默认开启，便于本地使用。
 
-## 7. 运行机制
+## 8. 运行机制
 
 - 传输：stdio，stdout 只输出 JSON-RPC，日志写 stderr
 - 虚拟显示：服务器启动一个共享 Xvfb，所有会话复用

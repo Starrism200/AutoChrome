@@ -19,6 +19,8 @@ build
 |---|---|---|
 | Google Chrome | 被自动化的浏览器 | `dl.google.com` 的 deb 包 |
 | `xvfb` | 虚拟显示器（无物理屏幕时有头运行 Chrome） | apt |
+| `x11vnc` | 把 Xvfb 暴露为 VNC，供人工接管 | apt |
+| `novnc` / `websockify` | 浏览器版 VNC 客户端 | apt |
 | `fonts-liberation` | 基础字体，避免页面渲染异常 | apt |
 | `ca-certificates` / `curl` | 下载 Chrome | apt |
 | Go 1.26+ | 编译 | 手动安装或用 `GO_BIN` 指定 |
@@ -33,7 +35,8 @@ sudo ./install.sh
 脚本行为：
 
 1. `apt-get update`
-2. 缺少时安装 `xvfb`、`fonts-liberation`、`ca-certificates`、`curl`
+2. 缺少时安装 `xvfb`、`fonts-liberation`、`ca-certificates`、`curl`、
+   `x11vnc`、`novnc`、`websockify`
 3. 缺少 `/usr/bin/google-chrome` 时下载并安装 Chrome 稳定版
 4. 检查 Go 工具链
 5. 编译 `bin/autochrome`

@@ -36,6 +36,7 @@ data/users/<id>/
 ./bin/autochrome user add alice
 ./bin/autochrome user add alice --allow-eval --allow-scripts --max-browsers 2
 ./bin/autochrome user add alice --proxy socks5://127.0.0.1:10801
+./bin/autochrome user add alice --vnc-port-start 20000 --vnc-port-end 20999
 ```
 
 查看：
@@ -73,7 +74,9 @@ export AUTOCHROME_USER=alice
   "allow_eval": true,
   "allow_scripts": true,
   "allowed_hosts": [],
-  "default_proxy": "socks5://127.0.0.1:10801"
+  "default_proxy": "socks5://127.0.0.1:10801",
+  "vnc_port_start": 20000,
+  "vnc_port_end": 20999
 }
 ```
 
@@ -85,6 +88,7 @@ export AUTOCHROME_USER=alice
 | `allow_scripts` | 是否允许运行脚本 |
 | `allowed_hosts` | 预留的域名白名单 |
 | `default_proxy` | 该用户未指定代理时使用 |
+| `vnc_port_start` / `vnc_port_end` | VNC/noVNC 自动分配端口范围，默认 10000–59999 |
 
 ## 4. 隔离模型
 
@@ -110,7 +114,22 @@ L2 不能做到：
 需要更强隔离时，为每个用户使用独立的系统账号或容器，并分别启动
 `autochrome mcp -user <id>`。
 
-## 5. 项目根目录
+## 5. VNC 与用户隔离
+
+每个用户启动自己的 desktop：
+
+```bash
+./bin/autochrome mcp -user alice --vnc
+# 或
+./bin/autochrome desktop -user alice
+```
+
+- 每个用户独立 Xvfb、x11vnc、websockify
+- 端口从该用户的 `vnc_port_start`–`vnc_port_end` 自动分配
+- 只监听 127.0.0.1，远程访问建议 SSH 隧道
+- 详见 [VNC.md](VNC.md)
+
+## 6. 项目根目录
 
 MCP 客户端启动进程时的工作目录可能不是项目根目录。AutoChrome 按以下顺序
 确定根目录：
@@ -121,7 +140,7 @@ MCP 客户端启动进程时的工作目录可能不是项目根目录。AutoChr
 
 推荐在 MCP 配置中显式设置 `AUTOCHROME_HOME`。
 
-## 6. 迁移
+## 7. 迁移
 
 已有的 `profiles/`、`scripts/custom/`、`data/` 仍属于 `default` 用户，
 无需迁移。新用户从 `data/users/<id>/` 开始。

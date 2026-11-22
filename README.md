@@ -20,6 +20,8 @@ English | [简体中文](README.zh-CN.md)
 - Cross-process browser concurrency limit using `flock` slots
 - Embedded JavaScript script SDK (`ac` / `page`) without a Node.js dependency
 - MCP stdio server with browser tools and resources
+- VNC/noVNC desktop for human takeover (QR scan, SMS code, CAPTCHA)
+- Challenge detection, QR capture and coordinate clicks
 - Multi-user isolation (L2: one MCP process and one directory tree per user)
 - CDP helpers: snapshots with element refs, screenshots, cookies, trusted keys
 
@@ -30,6 +32,7 @@ English | [简体中文](README.zh-CN.md)
 - Google Chrome
 - `xvfb`
 - `fonts-liberation`
+- `x11vnc`, `novnc`, `websockify` (for VNC; installed by `install.sh`)
 
 ## Install
 
@@ -147,6 +150,33 @@ wait, screenshot, cookie, eval and script tools, plus `autochrome://envs` and
 `autochrome://sessions` resources.
 See [docs/MCP.md](docs/MCP.md).
 
+## VNC / human takeover
+
+```bash
+./bin/autochrome mcp -user alice --vnc
+```
+
+The server prints a noVNC URL on stderr and exposes it through the
+`desktop_info` tool and the `autochrome://desktop` resource. A human can open
+the URL to scan a QR code, enter an SMS code or solve a CAPTCHA while the AI
+waits with `browser_wait`.
+
+Ports are auto-assigned from the user's configured range, default
+`10000-59999`:
+
+```bash
+./bin/autochrome user add alice --vnc-port-start 20000 --vnc-port-end 20999
+```
+
+For a separate service:
+
+```bash
+./bin/autochrome desktop -user alice
+DISPLAY=:100 ./bin/autochrome mcp -user alice
+```
+
+See [docs/VNC.md](docs/VNC.md) and [docs/INTERACTION.md](docs/INTERACTION.md).
+
 ## Layout
 
 ```text
@@ -162,6 +192,7 @@ internal/jsruntime/    Embedded JavaScript SDK (goja)
 internal/scripts/      Script discovery and manifests
 internal/mcpserver/    MCP stdio server
 internal/xvfb/         Shared virtual display
+internal/desktop/      VNC/noVNC desktop service
 internal/ua/           User-agent constants
 scripts/common.sh      GO_BIN / CHROME / build / xvfb_run
 scripts/custom/        Example user scripts
@@ -177,3 +208,5 @@ docs/                  Installation, browser, SDK, MCP and multi-user notes
 - [docs/SCRIPT_SDK.md](docs/SCRIPT_SDK.md) (Chinese)
 - [docs/MCP.md](docs/MCP.md) (Chinese)
 - [docs/MULTIUSER.md](docs/MULTIUSER.md) (Chinese)
+- [docs/VNC.md](docs/VNC.md) (Chinese)
+- [docs/INTERACTION.md](docs/INTERACTION.md) (Chinese)

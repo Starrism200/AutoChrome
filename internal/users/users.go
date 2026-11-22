@@ -18,6 +18,11 @@ import (
 
 const DefaultID = "default"
 
+const (
+	DefaultVNCPortStart = 10000
+	DefaultVNCPortEnd   = 59999
+)
+
 var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // User is one isolated environment owner.
@@ -30,6 +35,8 @@ type User struct {
 	AllowScripts bool     `json:"allow_scripts"`
 	AllowedHosts []string `json:"allowed_hosts,omitempty"`
 	DefaultProxy string   `json:"default_proxy,omitempty"`
+	VNCPortStart int      `json:"vnc_port_start,omitempty"`
+	VNCPortEnd   int      `json:"vnc_port_end,omitempty"`
 
 	Home       string `json:"-"`
 	Root       string `json:"-"`
@@ -86,6 +93,8 @@ func Resolve(id string) (User, error) {
 		u.MaxBrowsers = 10
 		u.AllowEval = true
 		u.AllowScripts = true
+		u.VNCPortStart = DefaultVNCPortStart
+		u.VNCPortEnd = DefaultVNCPortEnd
 		_ = u.load(u.settingsPath())
 		return u, nil
 	}
@@ -96,6 +105,8 @@ func Resolve(id string) (User, error) {
 	u.ShotRoot = filepath.Join(u.Root, "screenshots")
 	u.LogRoot = filepath.Join(u.Root, "logs")
 	u.SlotDir = filepath.Join(u.Root, "browser-slots")
+	u.VNCPortStart = DefaultVNCPortStart
+	u.VNCPortEnd = DefaultVNCPortEnd
 	if err := u.load(u.settingsPath()); err != nil {
 		if os.IsNotExist(err) {
 			return User{}, fmt.Errorf("user %q not found; run: autochrome user add %s", id, id)
@@ -138,6 +149,8 @@ func Add(id string) (User, error) {
 		u.CreatedAt = time.Now().Format(time.RFC3339)
 		u.MaxEnvs = 10
 		u.MaxBrowsers = 4
+		u.VNCPortStart = DefaultVNCPortStart
+		u.VNCPortEnd = DefaultVNCPortEnd
 	}
 	if err := u.EnsureDirs(); err != nil {
 		return User{}, err
@@ -196,6 +209,21 @@ func (u User) EnsureDirs() error {
 	return nil
 }
 
+// VNCRange returns the configured auto-allocation range for VNC ports.
+func (u User) VNCRange() (int, int) {
+	start, end := u.VNCPortStart, u.VNCPortEnd
+	if start <= 0 {
+		start = DefaultVNCPortStart
+	}
+	if end <= 0 {
+		end = DefaultVNCPortEnd
+	}
+	if end < start {
+		start, end = end, start
+	}
+	return start, end
+}
+
 // BrowserMax returns the effective browser cap.
 func (u User) BrowserMax() int {
 	if u.MaxBrowsers > 0 {
@@ -227,5 +255,11 @@ func (u *User) load(path string) error {
 	u.AllowScripts = stored.AllowScripts
 	u.AllowedHosts = stored.AllowedHosts
 	u.DefaultProxy = stored.DefaultProxy
+	if stored.VNCPortStart > 0 {
+		u.VNCPortStart = stored.VNCPortStart
+	}
+	if stored.VNCPortEnd > 0 {
+		u.VNCPortEnd = stored.VNCPortEnd
+	}
 	return nil
 }

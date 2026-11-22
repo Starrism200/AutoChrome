@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"autochrome/internal/browser"
+	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
 	"autochrome/internal/fingerprint"
 	"autochrome/internal/jsruntime"
@@ -32,6 +33,7 @@ type Server struct {
 	AllowEval    bool
 	AllowScripts bool
 	Manager      *session.Manager
+	Desktop      *desktop.Desktop
 }
 
 // New returns a server for user.
@@ -47,6 +49,9 @@ func New(u users.User, chrome string) *Server {
 // Run starts the stdio MCP server and blocks until the client disconnects.
 func (s *Server) Run(ctx context.Context) error {
 	s.Manager = session.NewManager(s.User, s.Chrome)
+	if s.Desktop != nil {
+		s.Manager.SetDisplay(s.Desktop.Display())
+	}
 	defer s.Manager.CloseAll()
 
 	srv := mcp.NewServer(
@@ -69,7 +74,12 @@ Workflow:
 
 Sessions stay alive between tool calls. Prefer snapshot refs over CSS selectors.
 Use script_list / script_run for reusable scripts. Scripts are executed in an
-embedded JavaScript runtime with a synchronous API.`
+embedded JavaScript runtime with a synchronous API.
+
+If a QR code, OTP input or CAPTCHA appears, call browser_detect_challenge, then
+browser_qr or browser_screenshot. When desktop_info reports a noVNC URL, tell
+the human to take over there. Wait for completion with browser_wait using
+url_contains, cookie_name, hidden_selector or text.`
 
 func (s *Server) register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "env_create", Description: "Create a browser environment directory with a deterministic fingerprint."}, s.envCreate)
@@ -85,6 +95,11 @@ func (s *Server) register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "browser_wait", Description: "Wait for a selector or visible text."}, s.browserWait)
 	mcp.AddTool(srv, &mcp.Tool{Name: "browser_screenshot", Description: "Capture a PNG screenshot, optionally inline."}, s.browserScreenshot)
 	mcp.AddTool(srv, &mcp.Tool{Name: "browser_cookies", Description: "Return cookies for the session."}, s.browserCookies)
+	mcp.AddTool(srv, &mcp.Tool{Name: "browser_detect_challenge", Description: "Detect QR code, OTP and CAPTCHA candidates on the page."}, s.browserDetectChallenge)
+	mcp.AddTool(srv, &mcp.Tool{Name: "browser_qr", Description: "Capture the first detected QR code as an inline image for a human to scan."}, s.browserQR)
+	mcp.AddTool(srv, &mcp.Tool{Name: "browser_click_xy", Description: "Click at viewport coordinates (for image CAPTCHAs)."}, s.browserClickXY)
+	mcp.AddTool(srv, &mcp.Tool{Name: "browser_scroll", Description: "Scroll the page by dx/dy CSS pixels."}, s.browserScroll)
+	mcp.AddTool(srv, &mcp.Tool{Name: "desktop_info", Description: "Return the noVNC URL for human takeover, when enabled."}, s.desktopInfo)
 	if s.AllowEval {
 		mcp.AddTool(srv, &mcp.Tool{Name: "browser_eval", Description: "Evaluate JavaScript in the page and await promises."}, s.browserEval)
 	}
@@ -105,6 +120,13 @@ func (s *Server) register(srv *mcp.Server) {
 		Description: "Sessions owned by this user", MIMEType: "application/json",
 	}, func(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		data, _ := json.MarshalIndent(s.Manager.List(), "", "  ")
+		return resourceText(req.Params.URI, string(data)), nil
+	})
+	srv.AddResource(&mcp.Resource{
+		URI: "autochrome://desktop", Name: "desktop", Title: "VNC desktop",
+		Description: "noVNC endpoint for human takeover", MIMEType: "application/json",
+	}, func(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		data, _ := json.MarshalIndent(s.desktopInfoValue(), "", "  ")
 		return resourceText(req.Params.URI, string(data)), nil
 	})
 }
@@ -353,10 +375,13 @@ func (s *Server) browserPress(_ context.Context, _ *mcp.CallToolRequest, in Pres
 }
 
 type WaitIn struct {
-	SessionID string `json:"session_id" jsonschema:"session id"`
-	Selector  string `json:"selector,omitempty" jsonschema:"CSS selector to wait for"`
-	Text      string `json:"text,omitempty" jsonschema:"visible text to wait for"`
-	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"timeout in milliseconds (default 30000)"`
+	SessionID      string `json:"session_id" jsonschema:"session id"`
+	Selector       string `json:"selector,omitempty" jsonschema:"CSS selector to wait for"`
+	HiddenSelector string `json:"hidden_selector,omitempty" jsonschema:"CSS selector that must disappear"`
+	Text           string `json:"text,omitempty" jsonschema:"visible text to wait for"`
+	URLContains    string `json:"url_contains,omitempty" jsonschema:"substring the page URL must contain"`
+	CookieName     string `json:"cookie_name,omitempty" jsonschema:"cookie name that must exist"`
+	TimeoutMS      int    `json:"timeout_ms,omitempty" jsonschema:"timeout in milliseconds (default 30000)"`
 }
 
 func (s *Server) browserWait(_ context.Context, _ *mcp.CallToolRequest, in WaitIn) (*mcp.CallToolResult, OKOut, error) {
@@ -364,10 +389,12 @@ func (s *Server) browserWait(_ context.Context, _ *mcp.CallToolRequest, in WaitI
 	if err != nil {
 		return nil, OKOut{}, err
 	}
-	timeout := time.Duration(in.TimeoutMS) * time.Millisecond
-	if err := sess.Do(func(ctx context.Context) error {
-		return browser.WaitFor(ctx, in.Selector, in.Text, timeout)
-	}); err != nil {
+	opts := browser.WaitOptions{
+		Selector: in.Selector, HiddenSelector: in.HiddenSelector, Text: in.Text,
+		URLContains: in.URLContains, CookieName: in.CookieName,
+		Timeout: time.Duration(in.TimeoutMS) * time.Millisecond,
+	}
+	if err := sess.Do(func(ctx context.Context) error { return browser.WaitForOptions(ctx, opts) }); err != nil {
 		return nil, OKOut{}, err
 	}
 	return nil, OKOut{OK: true}, nil
@@ -462,6 +489,121 @@ func (s *Server) browserEval(_ context.Context, _ *mcp.CallToolRequest, in EvalI
 		return nil, nil, err
 	}
 	return nil, out, nil
+}
+
+// ---- interactive takeover helpers ----
+
+type DetectChallengeIn struct {
+	SessionID string `json:"session_id" jsonschema:"session id"`
+}
+
+type DetectChallengeOut struct {
+	Challenges []browser.ChallengeCandidate `json:"challenges"`
+}
+
+func (s *Server) browserDetectChallenge(_ context.Context, _ *mcp.CallToolRequest, in DetectChallengeIn) (*mcp.CallToolResult, DetectChallengeOut, error) {
+	sess, err := s.Manager.Get(in.SessionID)
+	if err != nil {
+		return nil, DetectChallengeOut{}, err
+	}
+	var out []browser.ChallengeCandidate
+	if err := sess.Do(func(ctx context.Context) error {
+		v, e := browser.DetectChallenges(ctx)
+		out = v
+		return e
+	}); err != nil {
+		return nil, DetectChallengeOut{}, err
+	}
+	return nil, DetectChallengeOut{Challenges: out}, nil
+}
+
+type QRIn struct {
+	SessionID string `json:"session_id" jsonschema:"session id"`
+}
+
+type QROut struct {
+	Selector string `json:"selector"`
+	Name     string `json:"name,omitempty"`
+	Bytes    int    `json:"bytes"`
+}
+
+func (s *Server) browserQR(_ context.Context, _ *mcp.CallToolRequest, in QRIn) (*mcp.CallToolResult, QROut, error) {
+	sess, err := s.Manager.Get(in.SessionID)
+	if err != nil {
+		return nil, QROut{}, err
+	}
+	var buf []byte
+	var cand browser.ChallengeCandidate
+	if err := sess.Do(func(ctx context.Context) error {
+		b, c, e := browser.QRCodePNG(ctx)
+		buf, cand = b, c
+		return e
+	}); err != nil {
+		return nil, QROut{}, err
+	}
+	res := &mcp.CallToolResult{Content: []mcp.Content{
+		&mcp.TextContent{Text: "QR code captured for human scanning"},
+		&mcp.ImageContent{Data: buf, MIMEType: "image/png"},
+	}}
+	return res, QROut{Selector: cand.Selector, Name: cand.Name, Bytes: len(buf)}, nil
+}
+
+type ClickXYIn struct {
+	SessionID string  `json:"session_id" jsonschema:"session id"`
+	X         float64 `json:"x" jsonschema:"viewport x in CSS pixels"`
+	Y         float64 `json:"y" jsonschema:"viewport y in CSS pixels"`
+}
+
+func (s *Server) browserClickXY(_ context.Context, _ *mcp.CallToolRequest, in ClickXYIn) (*mcp.CallToolResult, OKOut, error) {
+	sess, err := s.Manager.Get(in.SessionID)
+	if err != nil {
+		return nil, OKOut{}, err
+	}
+	if err := sess.Do(func(ctx context.Context) error { return browser.ClickXY(ctx, in.X, in.Y) }); err != nil {
+		return nil, OKOut{}, err
+	}
+	return nil, OKOut{OK: true}, nil
+}
+
+type ScrollIn struct {
+	SessionID string `json:"session_id" jsonschema:"session id"`
+	DX        int    `json:"dx,omitempty" jsonschema:"horizontal delta in CSS pixels"`
+	DY        int    `json:"dy,omitempty" jsonschema:"vertical delta in CSS pixels"`
+}
+
+func (s *Server) browserScroll(_ context.Context, _ *mcp.CallToolRequest, in ScrollIn) (*mcp.CallToolResult, OKOut, error) {
+	sess, err := s.Manager.Get(in.SessionID)
+	if err != nil {
+		return nil, OKOut{}, err
+	}
+	if err := sess.Do(func(ctx context.Context) error { return browser.Scroll(ctx, in.DX, in.DY) }); err != nil {
+		return nil, OKOut{}, err
+	}
+	return nil, OKOut{OK: true}, nil
+}
+
+type DesktopInfoOut struct {
+	Enabled  bool   `json:"enabled"`
+	URL      string `json:"url,omitempty"`
+	Display  string `json:"display,omitempty"`
+	RFBPort  int    `json:"rfb_port,omitempty"`
+	WebPort  int    `json:"web_port,omitempty"`
+	Password bool   `json:"password,omitempty"`
+}
+
+func (s *Server) desktopInfoValue() DesktopInfoOut {
+	if s.Desktop == nil {
+		return DesktopInfoOut{Enabled: false}
+	}
+	info := s.Desktop.Info()
+	return DesktopInfoOut{
+		Enabled: true, URL: info.URL, Display: info.Display,
+		RFBPort: info.RFBPort, WebPort: info.WebPort, Password: info.Password,
+	}
+}
+
+func (s *Server) desktopInfo(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, DesktopInfoOut, error) {
+	return nil, s.desktopInfoValue(), nil
 }
 
 // ---- script tools ----

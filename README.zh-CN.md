@@ -17,6 +17,8 @@
 - 跨进程浏览器并发上限（`flock` 槽位）
 - 内置同步 JavaScript SDK（`ac` / `page`），无需 Node.js
 - stdio MCP 服务器，提供浏览器工具与资源
+- VNC/noVNC 远程桌面，支持真人接管（扫码、短信验证码、打码）
+- 二维码/OTP/验证码检测、二维码截图与坐标点击
 - 多用户隔离（L2：每用户一个 MCP 进程和独立目录树）
 - CDP 能力：带元素引用的快照、截图、Cookie、真实键盘事件
 
@@ -27,6 +29,7 @@
 - Google Chrome
 - `xvfb`
 - `fonts-liberation`
+- `x11vnc`、`novnc`、`websockify`（VNC 需要，`install.sh` 会安装）
 
 ## 安装
 
@@ -141,6 +144,31 @@ return { title, nodes: snap.nodes.length };
 脚本工具，以及 `autochrome://envs`、`autochrome://sessions` 资源。
 详见 [docs/MCP.md](docs/MCP.md)。
 
+## VNC / 人工接管
+
+```bash
+./bin/autochrome mcp -user alice --vnc
+```
+
+服务会在 stderr 打印 noVNC 地址，并通过 `desktop_info` 工具和
+`autochrome://desktop` 资源暴露。真人打开地址即可扫码、输验证码或打码，
+AI 用 `browser_wait` 等待完成。
+
+端口从用户配置的范围自动分配，默认 `10000-59999`：
+
+```bash
+./bin/autochrome user add alice --vnc-port-start 20000 --vnc-port-end 20999
+```
+
+独立服务方式：
+
+```bash
+./bin/autochrome desktop -user alice
+DISPLAY=:100 ./bin/autochrome mcp -user alice
+```
+
+详见 [docs/VNC.md](docs/VNC.md) 和 [docs/INTERACTION.md](docs/INTERACTION.md)。
+
 ## 目录结构
 
 ```text
@@ -156,6 +184,7 @@ internal/jsruntime/    嵌入式 JavaScript SDK（goja）
 internal/scripts/      脚本发现与 manifest
 internal/mcpserver/    MCP stdio 服务器
 internal/xvfb/         共享虚拟显示器
+internal/desktop/      VNC/noVNC 远程桌面服务
 internal/ua/           UA 常量
 scripts/common.sh      GO_BIN / CHROME / 构建 / xvfb_run
 scripts/custom/        示例用户脚本
@@ -171,3 +200,5 @@ docs/                  安装、浏览器、SDK、MCP 与多用户文档
 - [docs/SCRIPT_SDK.md](docs/SCRIPT_SDK.md)：JavaScript 脚本 API 与 AI 提示词
 - [docs/MCP.md](docs/MCP.md)：MCP 工具、资源与客户端配置
 - [docs/MULTIUSER.md](docs/MULTIUSER.md)：多用户模型、目录与权限
+- [docs/VNC.md](docs/VNC.md)：x11vnc + noVNC、端口与安全
+- [docs/INTERACTION.md](docs/INTERACTION.md)：扫码、验证码、打码的人工接力
