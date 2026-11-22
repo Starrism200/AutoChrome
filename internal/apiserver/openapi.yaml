@@ -243,6 +243,90 @@ paths:
       summary: Unbind Chrome version from container
       responses:
         "200": { description: Container }
+  /containers/{name}/clean:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Clean non-login data from a container
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cache: { type: boolean }
+                downloads: { type: boolean }
+                screenshots: { type: boolean }
+                attachments: { type: boolean }
+                restart: { type: boolean }
+                dry_run: { type: boolean }
+      responses:
+        "200": { description: Clean result }
+  /containers/{name}/attachments:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: List container attachments
+      responses:
+        "200": { description: Attachments }
+    post:
+      summary: Upload a container attachment
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                name: { type: string }
+      responses:
+        "201": { description: Attachment }
+  /containers/{name}/attachments/{aid}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+      - name: aid
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Attachment metadata
+      responses:
+        "200": { description: Attachment }
+    patch:
+      summary: Rename attachment
+      responses:
+        "200": { description: Attachment }
+    delete:
+      summary: Delete attachment
+      responses:
+        "200": { description: Deleted }
+  /containers/{name}/attachments/{aid}/download:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+      - name: aid
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Download attachment
+      responses:
+        "200":
+          description: File
+          content:
+            application/octet-stream: {}
   /proxies:
     get:
       summary: List proxies

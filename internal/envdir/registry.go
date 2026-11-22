@@ -28,7 +28,14 @@ func NewRegistry(path string) *Registry {
 func (r *Registry) List() ([]Meta, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.load()
+	list, err := r.load()
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		list[i].FillPaths()
+	}
+	return list, nil
 }
 
 // Get returns an environment by id.
@@ -39,6 +46,7 @@ func (r *Registry) Get(id string) (Meta, bool) {
 	}
 	for _, m := range list {
 		if m.ID == id {
+			m.FillPaths()
 			return m, true
 		}
 	}
@@ -73,6 +81,7 @@ func (r *Registry) NameTaken(name, ignoreID string) bool {
 
 // Put inserts or replaces an environment entry.
 func (r *Registry) Put(meta Meta) error {
+	meta.FillPaths()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	lock, err := filelock.Acquire(r.path)

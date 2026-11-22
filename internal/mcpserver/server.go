@@ -11,17 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"autochrome/internal/browser"
+	"autochrome/internal/cleaner"
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
 	"autochrome/internal/fingerprint"
 	"autochrome/internal/jobs"
 	"autochrome/internal/jsruntime"
+	"autochrome/internal/maintenance"
 	"autochrome/internal/scripts"
 	"autochrome/internal/session"
 	"autochrome/internal/users"
@@ -146,6 +149,7 @@ func (s *Server) register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "browser_click_xy", Description: "Click at viewport coordinates (for image CAPTCHAs)."}, s.browserClickXY)
 	mcp.AddTool(srv, &mcp.Tool{Name: "browser_scroll", Description: "Scroll the page by dx/dy CSS pixels."}, s.browserScroll)
 	mcp.AddTool(srv, &mcp.Tool{Name: "desktop_info", Description: "Return the noVNC URL for human takeover, when enabled."}, s.desktopInfo)
+	mcp.AddTool(srv, &mcp.Tool{Name: "container_clean", Description: "Clear cache, downloads, screenshots or attachments while preserving login state."}, s.containerClean)
 	if s.AllowEval {
 		mcp.AddTool(srv, &mcp.Tool{Name: "browser_eval", Description: "Evaluate JavaScript in the page and await promises."}, s.browserEval)
 	}
@@ -547,7 +551,11 @@ func (s *Server) browserScreenshot(_ context.Context, _ *mcp.CallToolRequest, in
 	if in.Path != "" {
 		path := in.Path
 		if !filepath.IsAbs(path) {
-			path = filepath.Join(s.userSnapshot().ShotRoot, path)
+			dir := sess.ScreenshotDir
+			if dir == "" {
+				dir = filepath.Join(sess.ProfileDir, "screenshots")
+			}
+			path = filepath.Join(dir, path)
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return nil, ScreenshotOut{}, err
@@ -768,6 +776,84 @@ func (s *Server) scriptRun(_ context.Context, _ *mcp.CallToolRequest, in ScriptR
 		return nil, nil, err
 	}
 	return nil, result, nil
+}
+
+// ---- container maintenance ----
+
+type ContainerCleanIn struct {
+	Env         string `json:"env,omitempty" jsonschema:"container id or name"`
+	SessionID   string `json:"session_id,omitempty" jsonschema:"session id whose container should be cleaned"`
+	Cache       *bool  `json:"cache,omitempty" jsonschema:"clear cache/history (default true)"`
+	Screenshots *bool  `json:"screenshots,omitempty" jsonschema:"clear screenshots directory"`
+	Attachments *bool  `json:"attachments,omitempty" jsonschema:"clear attachments directory"`
+	Downloads   *bool  `json:"downloads,omitempty" jsonschema:"clear downloads directory (default true)"`
+	Restart     *bool  `json:"restart,omitempty" jsonschema:"restart browser if it was open (default true)"`
+	DryRun      bool   `json:"dry_run,omitempty" jsonschema:"only report what would be removed"`
+}
+
+type ContainerCleanOut struct {
+	Clean     cleaner.Result `json:"clean"`
+	SessionID string         `json:"session_id,omitempty"`
+	Restarted bool           `json:"restarted"`
+}
+
+func (s *Server) findMeta(envID string) (envdir.Meta, bool) {
+	if m, ok := s.Registry.Get(envID); ok {
+		return m, true
+	}
+	if m, _, ok := envdir.Find(s.userSnapshot().EnvRoot, envID); ok {
+		return m, true
+	}
+	for _, m := range s.listEnvs() {
+		if m.Name == envID || m.ID == envID {
+			return m, true
+		}
+	}
+	return envdir.Meta{}, false
+}
+
+func (s *Server) containerClean(_ context.Context, _ *mcp.CallToolRequest, in ContainerCleanIn) (*mcp.CallToolResult, ContainerCleanOut, error) {
+	envID := strings.TrimSpace(in.Env)
+	if in.SessionID != "" {
+		sess, err := s.Manager.Get(in.SessionID)
+		if err != nil {
+			return nil, ContainerCleanOut{}, err
+		}
+		envID = sess.EnvID
+	}
+	if envID == "" {
+		return nil, ContainerCleanOut{}, fmt.Errorf("env or session_id is required")
+	}
+	meta, ok := s.findMeta(envID)
+	if !ok {
+		return nil, ContainerCleanOut{}, fmt.Errorf("container %q not found", envID)
+	}
+	opts := cleaner.Options{Cache: true, Downloads: true, DryRun: in.DryRun}
+	if in.Cache != nil {
+		opts.Cache = *in.Cache
+	}
+	if in.Screenshots != nil {
+		opts.Screenshots = *in.Screenshots
+	}
+	if in.Attachments != nil {
+		opts.Attachments = *in.Attachments
+	}
+	if in.Downloads != nil {
+		opts.Downloads = *in.Downloads
+	}
+	restart := true
+	if in.Restart != nil {
+		restart = *in.Restart
+	}
+	result, sess, err := maintenance.Clean(s.Manager, meta, opts, restart)
+	if err != nil {
+		return nil, ContainerCleanOut{}, err
+	}
+	out := ContainerCleanOut{Clean: result, Restarted: sess != nil}
+	if sess != nil {
+		out.SessionID = sess.ID
+	}
+	return nil, out, nil
 }
 
 // ---- async script jobs ----

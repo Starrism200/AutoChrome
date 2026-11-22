@@ -30,6 +30,8 @@ English | [简体中文](README.zh-CN.md)
 - SSE events, batch session open, token rotation and interval schedules
 - Remote MCP over Streamable HTTP (`serve --mcp`)
 - Asynchronous script jobs with persistent logs and cancellation
+- Per-container downloads, screenshots and attachments directories
+- Safe container cleanup (cache/history/downloads) that preserves login
 - Restart sessions/containers without restarting the service
 - Refreshing `/vnc?token=...` relaunches a closed browser automatically
 - Per-container Chrome viewport size (default 1366x900, 1920x1080 supported)
@@ -216,6 +218,19 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 See [docs/API.md](docs/API.md).
 
+## Container cleanup
+
+```bash
+./bin/autochrome clean -user alice -name demo --cache --downloads --dry-run
+./bin/autochrome clean -user alice -name demo --cache --downloads --screenshots --attachments
+```
+
+`--cache` includes HTTP/disk/GPU cache, history, favicons and other non-login
+files. Cookies, local storage, IndexedDB, Login Data, Preferences, extensions
+and Service Worker data are preserved. If the browser is running, use
+`POST /api/v1/containers/{name}/clean`; the CLI refuses to clean a profile that
+is locked by another process.
+
 ## VNC / human takeover
 
 ```bash
@@ -251,6 +266,8 @@ internal/browser/      Chrome launch, CDP operations, snapshots, screenshots
 internal/browserslot/  Cross-process browser concurrency slots
 internal/envdir/       Environment directories, registry and archives
 internal/attachments/  Generic attachment store
+internal/cleaner/      Safe cache/history/download cleanup
+internal/maintenance/  Close-clean-reopen coordination
 internal/fingerprint/  Deterministic fingerprint generation
 internal/users/        Per-user directories, quotas and permissions
 internal/session/      Long-lived browser sessions

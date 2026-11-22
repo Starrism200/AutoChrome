@@ -38,6 +38,7 @@ type Options struct {
 	SlotMax     int
 	SlotWait    time.Duration
 	Env         []string
+	DownloadDir string
 }
 
 // Launch starts a browser for one account and returns its context plus a
@@ -137,6 +138,11 @@ func Launch(opts Options) (context.Context, func(), error) {
 	}
 	if opts.ProxyAddr != "" {
 		allocOpts = append(allocOpts, chromedp.Flag("proxy-server", opts.ProxyAddr))
+	}
+	if opts.DownloadDir != "" {
+		if err := os.MkdirAll(opts.DownloadDir, 0o755); err == nil {
+			allocOpts = append(allocOpts, chromedp.Flag("download-default-directory", opts.DownloadDir))
+		}
 	}
 	if len(opts.Env) > 0 {
 		allocOpts = append(allocOpts, chromedp.Env(opts.Env...))

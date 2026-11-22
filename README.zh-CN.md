@@ -27,6 +27,8 @@
 - SSE 事件流、批量打开会话、token 轮换、定时任务
 - 远程 MCP（Streamable HTTP，`serve --mcp`）
 - 异步脚本任务，带持久化日志和取消
+- 每容器独立的下载、截图、附件目录
+- 安全清理缓存/历史/下载，保留登录
 - 不需要重启服务即可重新拉起会话/容器
 - 刷新 `/vnc?token=...` 会自动拉起已关闭的浏览器
 - 容器级 Chrome 视口大小（默认 1366x900，支持 1920x1080）
@@ -207,6 +209,18 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 详见 [docs/API.md](docs/API.md)。
 
+## 容器清理
+
+```bash
+./bin/autochrome clean -user alice -name demo --cache --downloads --dry-run
+./bin/autochrome clean -user alice -name demo --cache --downloads --screenshots --attachments
+```
+
+`--cache` 包含 HTTP/磁盘/GPU 缓存、历史、Favicons 等所有不影响登录的文件；
+Cookie、Local Storage、IndexedDB、Login Data、Preferences、扩展和
+Service Worker 数据都会保留。浏览器正在运行时请用
+`POST /api/v1/containers/{name}/clean`；CLI 会拒绝清理被其它进程锁定的 profile。
+
 ## VNC / 人工接管
 
 ```bash
@@ -240,6 +254,8 @@ internal/browser/      Chrome 启动、CDP 操作、快照、截图
 internal/browserslot/  跨进程浏览器并发槽位
 internal/envdir/       环境目录、索引与打包
 internal/attachments/  通用附件存储
+internal/cleaner/      安全的缓存/历史/下载清理
+internal/maintenance/  关闭-清理-重启协调
 internal/fingerprint/  确定性浏览器指纹生成
 internal/users/        用户目录、配额与权限
 internal/session/      长生命周期浏览器会话

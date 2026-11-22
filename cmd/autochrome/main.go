@@ -22,10 +22,12 @@ import (
 	"autochrome/internal/apiserver"
 	"autochrome/internal/browser"
 	chromepkg "autochrome/internal/chrome"
+	"autochrome/internal/cleaner"
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
 	"autochrome/internal/fingerprint"
 	"autochrome/internal/jsruntime"
+	"autochrome/internal/maintenance"
 	"autochrome/internal/mcpserver"
 	"autochrome/internal/scripts"
 	"autochrome/internal/session"
@@ -56,6 +58,8 @@ func main() {
 		cmdDesktop(os.Args[2:])
 	case "serve":
 		cmdServe(os.Args[2:])
+	case "clean":
+		cmdClean(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -76,6 +80,7 @@ Usage:
   autochrome mcp         [-user USER] [--vnc] [--allow-eval] [--allow-scripts]
   autochrome desktop     [-user USER] [--vnc-password PASS] [--port-start N] [--port-end N]
   autochrome serve       [-user USER] [-addr 127.0.0.1:8787] [--mcp] [--vnc] [--token TOKEN]
+  autochrome clean       [-user USER] (-id ID | -name NAME) [--cache] [--downloads] [--dry-run]
 
 The default user keeps the historical layout (profiles/, scripts/custom/, data/).
 Other users live under data/users/<id>/.
@@ -299,6 +304,7 @@ func cmdOpen(args []string) {
 		SlotDir:     slot,
 		SlotMax:     max,
 		Env:         displayEnv,
+		DownloadDir: meta.DownloadDir,
 	})
 	if err != nil {
 		log.Fatalf("launch browser: %v", err)
@@ -319,7 +325,11 @@ func cmdOpen(args []string) {
 	if *screenshot != "" {
 		path := *screenshot
 		if !filepath.IsAbs(path) {
-			path = filepath.Join(u.ShotRoot, path)
+			dir := meta.ScreenshotDir
+			if dir == "" {
+				dir = filepath.Join(meta.Dir, "screenshots")
+			}
+			path = filepath.Join(dir, path)
 		}
 		if err := browser.Screenshot(ctx, path); err != nil {
 			log.Printf("screenshot: %v", err)
@@ -334,6 +344,76 @@ func cmdOpen(args []string) {
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 	}
+}
+
+func cmdClean(args []string) {
+	fs := flag.NewFlagSet("clean", flag.ExitOnError)
+	userID := fs.String("user", "", "user id")
+	id := fs.String("id", "", "container id")
+	name := fs.String("name", "", "container name")
+	chrome := fs.String("chrome", "/usr/bin/google-chrome", "Chrome executable")
+	cache := fs.Bool("cache", true, "clear cache/history")
+	downloads := fs.Bool("downloads", true, "clear downloads directory")
+	screenshots := fs.Bool("screenshots", false, "clear screenshots directory")
+	attachments := fs.Bool("attachments", false, "clear attachments directory")
+	dryRun := fs.Bool("dry-run", false, "only report what would be removed")
+	noRestart := fs.Bool("no-restart", false, "do not reopen the browser")
+	_ = fs.Parse(args)
+
+	u, err := users.Resolve(*userID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	meta, err := findContainerMeta(u, *id, *name)
+	if err != nil {
+		log.Fatal(err)
+	}
+	mgr := session.NewManager(u, *chrome)
+	defer mgr.CloseAll()
+	opts := cleaner.Options{
+		Cache: *cache, Downloads: *downloads, Screenshots: *screenshots,
+		Attachments: *attachments, DryRun: *dryRun,
+	}
+	result, sess, err := maintenance.Clean(mgr, meta, opts, !*noRestart)
+	if err != nil {
+		log.Fatal(err)
+	}
+	out := map[string]any{"clean": result, "restarted": sess != nil}
+	if sess != nil {
+		out["session_id"] = sess.ID
+	}
+	printJSON(out)
+}
+
+func findContainerMeta(u users.User, id, name string) (envdir.Meta, error) {
+	reg := envdir.NewRegistry(u.RegistryPath())
+	matches := func(m envdir.Meta) bool {
+		return (name != "" && (m.Name == name || m.ID == name)) ||
+			(name == "" && id != "" && m.ID == id)
+	}
+	if list, err := reg.List(); err == nil {
+		for _, m := range list {
+			if matches(m) {
+				m.FillPaths()
+				return m, nil
+			}
+		}
+	}
+	if list, err := envdir.List(u.EnvRoot); err == nil {
+		for _, m := range list {
+			if matches(m) {
+				m.FillPaths()
+				_ = reg.Put(m)
+				return m, nil
+			}
+		}
+	}
+	if id != "" {
+		if m, ok := reg.Get(id); ok {
+			return m, nil
+		}
+	}
+	return envdir.Meta{}, fmt.Errorf("container not found")
 }
 
 func cmdUser(args []string) {

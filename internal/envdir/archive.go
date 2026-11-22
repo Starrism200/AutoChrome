@@ -159,6 +159,9 @@ func Import(root string, r io.Reader) (Meta, string, error) {
 		return Meta{}, "", err
 	}
 	meta.Dir = target
+	meta.DownloadDir = filepath.Join(target, "downloads")
+	meta.ScreenshotDir = filepath.Join(target, "screenshots")
+	meta.AttachmentDir = filepath.Join(target, "attachments")
 	if err := writeMeta(target, meta); err != nil {
 		_ = os.RemoveAll(target)
 		return Meta{}, "", err

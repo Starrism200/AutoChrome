@@ -240,6 +240,49 @@ curl -X PUT -H "$H" -H 'Content-Type: application/json' \
 
 单文件上限 512MB。
 
+### 容器附件
+
+每个容器有独立附件目录 `<容器目录>/attachments`，与通用 `/attachments` 分开：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/containers/{name}/attachments` | 附件列表 |
+| POST | `/api/v1/containers/{name}/attachments` | multipart 上传 `file` |
+| GET | `/api/v1/containers/{name}/attachments/{aid}` | 元数据 |
+| PATCH | `/api/v1/containers/{name}/attachments/{aid}` | 重命名 |
+| GET | `/api/v1/containers/{name}/attachments/{aid}/download` | 下载 |
+| DELETE | `/api/v1/containers/{name}/attachments/{aid}` | 删除 |
+
+`/envs/{id}/attachments/...` 等价。
+
+### 容器清理
+
+```http
+POST /api/v1/containers/{name}/clean
+```
+
+```json
+{
+  "cache": true,
+  "downloads": true,
+  "screenshots": false,
+  "attachments": false,
+  "restart": true,
+  "dry_run": false
+}
+```
+
+- `cache`：所有不影响登录的缓存/历史/Favicons/临时文件
+- `downloads`：清空 `<容器目录>/downloads`
+- `screenshots`：清空 `<容器目录>/screenshots`
+- `attachments`：清空 `<容器目录>/attachments`
+- `restart`：如果清理前有会话，关闭→清理→用同一 profile/代理/Chrome 版本/URL 重启；没有会话时默认只清理不打开
+- `dry_run`：只返回将删除的路径和大小
+
+始终保留 Cookie、Local Storage、Session Storage、IndexedDB、WebStorage、
+Login Data、ClientCertificates、Preferences、Extensions、Service Worker、
+Network/Cookies、`Local State` 和 `env.json`。
+
 ### Cookie 与 UA
 
 | 方法 | 路径 | 说明 |

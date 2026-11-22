@@ -8,6 +8,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -422,5 +424,102 @@ func TestContainerSize(t *testing.T) {
 	}
 	if out.Env.Fingerprint.Width != 1920 || out.Env.Fingerprint.Height != 1080 {
 		t.Fatalf("size = %+v", out)
+	}
+}
+
+func TestContainerCleanPreservesLogin(t *testing.T) {
+	_, ts := newTestAPI(t)
+	resp, data := request(t, ts, http.MethodPost, "/api/v1/containers", "test-token", map[string]any{"id": "cleanme", "name": "cleanme"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d %s", resp.StatusCode, data)
+	}
+	var created struct {
+		Dir string `json:"dir"`
+	}
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatal(err)
+	}
+	write := func(rel string, size int) {
+		path := filepath.Join(created.Dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, make([]byte, size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Default/Cache/data", 100)
+	write("Default/History", 50)
+	write("Default/Cookies", 20)
+	write("Default/Network/Cookies", 25)
+	write("Default/Local Storage/leveldb/data", 30)
+	write("downloads/file.bin", 40)
+	write("screenshots/file.png", 50)
+	write("attachments/file.txt", 60)
+
+	resp, data = request(t, ts, http.MethodPost, "/api/v1/containers/cleanme/clean", "test-token", map[string]any{
+		"screenshots": true, "attachments": true, "cache": true, "downloads": true,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("clean = %d %s", resp.StatusCode, data)
+	}
+	for _, rel := range []string{"Default/Cache", "Default/History", "downloads/file.bin", "screenshots/file.png", "attachments/file.txt"} {
+		if _, err := os.Stat(filepath.Join(created.Dir, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s should be removed", rel)
+		}
+	}
+	for _, rel := range []string{"Default/Cookies", "Default/Network/Cookies", "Default/Local Storage/leveldb/data", "env.json"} {
+		if _, err := os.Stat(filepath.Join(created.Dir, rel)); err != nil {
+			t.Errorf("%s should be preserved: %v", rel, err)
+		}
+	}
+}
+
+func TestContainerAttachments(t *testing.T) {
+	_, ts := newTestAPI(t)
+	resp, _ := request(t, ts, http.MethodPost, "/api/v1/containers", "test-token", map[string]any{"id": "attach", "name": "attach"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d", resp.StatusCode)
+	}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/containers/attach/attachments", &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-token")
+	up, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upData, _ := io.ReadAll(up.Body)
+	up.Body.Close()
+	if up.StatusCode != http.StatusCreated {
+		t.Fatalf("upload = %d %s", up.StatusCode, upData)
+	}
+	var f struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(upData, &f); err != nil || f.ID == "" {
+		t.Fatalf("attachment id: %v %s", err, upData)
+	}
+	resp, data := request(t, ts, http.MethodGet, "/api/v1/containers/attach/attachments/"+f.ID+"/download", "test-token", nil)
+	if resp.StatusCode != http.StatusOK || string(data) != "hello" {
+		t.Fatalf("download = %d %q", resp.StatusCode, data)
+	}
+	resp, _ = request(t, ts, http.MethodDelete, "/api/v1/containers/attach/attachments/"+f.ID, "test-token", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete = %d", resp.StatusCode)
 	}
 }

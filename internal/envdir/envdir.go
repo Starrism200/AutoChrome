@@ -32,6 +32,9 @@ type Meta struct {
 	ProxyID       string              `json:"proxy_id,omitempty"`
 	Proxy         string              `json:"proxy,omitempty"`
 	ChromeVersion string              `json:"chrome_version,omitempty"`
+	DownloadDir   string              `json:"download_dir,omitempty"`
+	ScreenshotDir string              `json:"screenshot_dir,omitempty"`
+	AttachmentDir string              `json:"attachment_dir,omitempty"`
 	Fingerprint   fingerprint.Profile `json:"fingerprint"`
 }
 
@@ -70,6 +73,21 @@ func Create(root, platform, id string, fp fingerprint.Profile) (string, error) {
 }
 
 // CreateAt makes an environment at an explicit directory.
+func (m *Meta) FillPaths() {
+	if m.Dir == "" {
+		return
+	}
+	if m.DownloadDir == "" {
+		m.DownloadDir = filepath.Join(m.Dir, "downloads")
+	}
+	if m.ScreenshotDir == "" {
+		m.ScreenshotDir = filepath.Join(m.Dir, "screenshots")
+	}
+	if m.AttachmentDir == "" {
+		m.AttachmentDir = filepath.Join(m.Dir, "attachments")
+	}
+}
+
 func CreateAt(dir, platform, id string, fp fingerprint.Profile) (Meta, error) {
 	if strings.TrimSpace(id) == "" {
 		return Meta{}, fmt.Errorf("empty environment id")
@@ -84,6 +102,12 @@ func CreateAt(dir, platform, id string, fp fingerprint.Profile) (Meta, error) {
 		return meta, nil
 	}
 	meta := Meta{ID: id, Platform: platform, Dir: dir, CreatedAt: time.Now().Format(time.RFC3339), Fingerprint: fp}
+	meta.FillPaths()
+	for _, sub := range []string{meta.DownloadDir, meta.ScreenshotDir, meta.AttachmentDir} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			return Meta{}, err
+		}
+	}
 	if err := writeMeta(dir, meta); err != nil {
 		return Meta{}, err
 	}
@@ -95,6 +119,7 @@ func WriteMeta(dir string, meta Meta) error { return writeMeta(dir, meta) }
 
 func writeMeta(dir string, meta Meta) error {
 	meta.Dir = dir
+	meta.FillPaths()
 	b, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
@@ -112,6 +137,7 @@ func ReadMeta(dir string) (Meta, bool) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return Meta{}, false
 	}
+	m.FillPaths()
 	return m, true
 }
 

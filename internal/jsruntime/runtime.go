@@ -410,7 +410,11 @@ func (r *Runner) pageObject(vm *goja.Runtime, s *session.Session) *goja.Object {
 		res := map[string]any{"bytes": len(buf)}
 		if path != "" {
 			if !filepath.IsAbs(path) {
-				path = filepath.Join(r.User.ShotRoot, path)
+				dir := s.ScreenshotDir
+				if dir == "" {
+					dir = filepath.Join(s.ProfileDir, "screenshots")
+				}
+				path = filepath.Join(dir, path)
 			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				panic(vm.NewGoError(err))

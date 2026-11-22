@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -30,6 +31,9 @@ type Info struct {
 	URL           string `json:"url,omitempty"`
 	Proxy         string `json:"proxy,omitempty"`
 	ChromeVersion string `json:"chrome_version,omitempty"`
+	DownloadDir   string `json:"download_dir,omitempty"`
+	ScreenshotDir string `json:"screenshot_dir,omitempty"`
+	AttachmentDir string `json:"attachment_dir,omitempty"`
 	Headless      bool   `json:"headless"`
 	CreatedAt     string `json:"created_at"`
 }
@@ -42,6 +46,9 @@ type Session struct {
 	ProfileDir    string
 	Proxy         string
 	ChromeVersion string
+	DownloadDir   string
+	ScreenshotDir string
+	AttachmentDir string
 	Headless      bool
 	CreatedAt     time.Time
 
@@ -194,8 +201,14 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool, chrome
 		meta, hasMeta = created, true
 	}
 	meta.ID, meta.Dir = envID, dir
+	meta.FillPaths()
 	if meta.Platform == "" {
 		meta.Platform = platform
+	}
+	for _, sub := range []string{meta.DownloadDir, meta.ScreenshotDir, meta.AttachmentDir} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			return nil, err
+		}
 	}
 	_ = m.registry.Put(meta)
 	if proxy == "" && hasMeta {
@@ -241,6 +254,7 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool, chrome
 		SlotDir:     user.SlotDir,
 		SlotMax:     user.BrowserMax(),
 		Env:         env,
+		DownloadDir: meta.DownloadDir,
 	})
 	if err != nil {
 		return nil, err
@@ -253,6 +267,9 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool, chrome
 		ProfileDir:    dir,
 		Proxy:         proxy,
 		ChromeVersion: displayVersion,
+		DownloadDir:   meta.DownloadDir,
+		ScreenshotDir: meta.ScreenshotDir,
+		AttachmentDir: meta.AttachmentDir,
 		Headless:      headless,
 		CreatedAt:     time.Now(),
 		manager:       m,
@@ -407,6 +424,9 @@ func (s *Session) Info() Info {
 		URL:           url,
 		Proxy:         s.Proxy,
 		ChromeVersion: s.ChromeVersion,
+		DownloadDir:   s.DownloadDir,
+		ScreenshotDir: s.ScreenshotDir,
+		AttachmentDir: s.AttachmentDir,
 		Headless:      s.Headless,
 		CreatedAt:     s.CreatedAt.Format(time.RFC3339),
 	}

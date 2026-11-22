@@ -29,12 +29,14 @@ import (
 	"autochrome/internal/attachments"
 	"autochrome/internal/browser"
 	"autochrome/internal/chrome"
+	"autochrome/internal/cleaner"
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
 	"autochrome/internal/filelock"
 	"autochrome/internal/fingerprint"
 	"autochrome/internal/jobs"
 	"autochrome/internal/jsruntime"
+	"autochrome/internal/maintenance"
 	"autochrome/internal/mcpserver"
 	"autochrome/internal/proxy"
 	"autochrome/internal/scheduler"
@@ -69,6 +71,7 @@ type Server struct {
 	EnableMCP  bool
 	MCP        *mcpserver.Server
 	MCPHandler http.Handler
+	cleanMu    sync.Mutex
 
 	interMu      sync.Mutex
 	interactions map[string]*interaction
@@ -185,6 +188,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/envs/{id}/proxy", s.handleEnvUnbindProxy)
 	mux.HandleFunc("PUT /api/v1/envs/{id}/size", s.handleEnvSize)
 	mux.HandleFunc("POST /api/v1/envs/{id}/restart", s.handleEnvRestart)
+	mux.HandleFunc("POST /api/v1/envs/{id}/clean", s.handleEnvClean)
 	mux.HandleFunc("PUT /api/v1/envs/{id}/chrome", s.handleEnvChrome)
 	mux.HandleFunc("DELETE /api/v1/envs/{id}/chrome", s.handleEnvChromeUnbind)
 	mux.HandleFunc("GET /api/v1/envs/{id}/export", s.handleEnvExport)
@@ -202,6 +206,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/containers/{name}/proxy", s.containerAlias(s.handleEnvUnbindProxy))
 	mux.HandleFunc("PUT /api/v1/containers/{name}/size", s.containerAlias(s.handleEnvSize))
 	mux.HandleFunc("POST /api/v1/containers/{name}/restart", s.containerAlias(s.handleEnvRestart))
+	mux.HandleFunc("POST /api/v1/containers/{name}/clean", s.containerAlias(s.handleEnvClean))
 	mux.HandleFunc("PUT /api/v1/containers/{name}/chrome", s.containerAlias(s.handleEnvChrome))
 	mux.HandleFunc("DELETE /api/v1/containers/{name}/chrome", s.containerAlias(s.handleEnvChromeUnbind))
 
@@ -268,6 +273,20 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/v1/attachments/{id}", s.handleAttachmentRename)
 	mux.HandleFunc("GET /api/v1/attachments/{id}/download", s.handleAttachmentDownload)
 	mux.HandleFunc("DELETE /api/v1/attachments/{id}", s.handleAttachmentDelete)
+
+	mux.HandleFunc("GET /api/v1/envs/{id}/attachments", s.handleContainerAttachmentList)
+	mux.HandleFunc("POST /api/v1/envs/{id}/attachments", s.handleContainerAttachmentAdd)
+	mux.HandleFunc("GET /api/v1/envs/{id}/attachments/{aid}", s.handleContainerAttachmentGet)
+	mux.HandleFunc("PATCH /api/v1/envs/{id}/attachments/{aid}", s.handleContainerAttachmentRename)
+	mux.HandleFunc("GET /api/v1/envs/{id}/attachments/{aid}/download", s.handleContainerAttachmentDownload)
+	mux.HandleFunc("DELETE /api/v1/envs/{id}/attachments/{aid}", s.handleContainerAttachmentDelete)
+
+	mux.HandleFunc("GET /api/v1/containers/{name}/attachments", s.handleContainerAttachmentList)
+	mux.HandleFunc("POST /api/v1/containers/{name}/attachments", s.handleContainerAttachmentAdd)
+	mux.HandleFunc("GET /api/v1/containers/{name}/attachments/{aid}", s.handleContainerAttachmentGet)
+	mux.HandleFunc("PATCH /api/v1/containers/{name}/attachments/{aid}", s.handleContainerAttachmentRename)
+	mux.HandleFunc("GET /api/v1/containers/{name}/attachments/{aid}/download", s.handleContainerAttachmentDownload)
+	mux.HandleFunc("DELETE /api/v1/containers/{name}/attachments/{aid}", s.handleContainerAttachmentDelete)
 
 	mux.HandleFunc("GET /api/v1/desktop", s.handleDesktop)
 	mux.HandleFunc("POST /api/v1/desktop/token", s.handleDesktopToken)
@@ -830,7 +849,11 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("json") == "1" {
 		out := map[string]any{"bytes": len(buf), "base64": base64.StdEncoding.EncodeToString(buf)}
 		if name := r.URL.Query().Get("name"); name != "" {
-			path := filepath.Join(s.userSnapshot().ShotRoot, filepath.Base(name))
+			dir := sess.ScreenshotDir
+			if dir == "" {
+				dir = filepath.Join(sess.ProfileDir, "screenshots")
+			}
+			path := filepath.Join(dir, filepath.Base(name))
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
 				if err := os.WriteFile(path, buf, 0o600); err == nil {
 					out["path"] = path
@@ -1735,6 +1758,56 @@ func (s *Server) handleEnvSize(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"env": updated, "session_id": sessionID})
 }
 
+func (s *Server) handleEnvClean(w http.ResponseWriter, r *http.Request) {
+	meta, _, ok := s.findEnv(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	var in struct {
+		Cache       *bool `json:"cache"`
+		Screenshots *bool `json:"screenshots"`
+		Attachments *bool `json:"attachments"`
+		Downloads   *bool `json:"downloads"`
+		Restart     *bool `json:"restart"`
+		DryRun      bool  `json:"dry_run"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	opts := cleaner.Options{Cache: true, Downloads: true, DryRun: in.DryRun}
+	if in.Cache != nil {
+		opts.Cache = *in.Cache
+	}
+	if in.Screenshots != nil {
+		opts.Screenshots = *in.Screenshots
+	}
+	if in.Attachments != nil {
+		opts.Attachments = *in.Attachments
+	}
+	if in.Downloads != nil {
+		opts.Downloads = *in.Downloads
+	}
+	restart := true
+	if in.Restart != nil {
+		restart = *in.Restart
+	}
+	s.cleanMu.Lock()
+	result, sess, err := maintenance.Clean(s.Manager, meta, opts, restart)
+	s.cleanMu.Unlock()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "clean_failed", err.Error())
+		return
+	}
+	out := map[string]any{"clean": result, "restarted": sess != nil}
+	if sess != nil {
+		out["session_id"] = sess.ID
+		out["url"] = sess.Info().URL
+	}
+	s.publish("container.cleaned", out)
+	writeJSON(w, http.StatusOK, out)
+}
+
 // ---- environment export / import ----
 
 func (s *Server) handleEnvExport(w http.ResponseWriter, r *http.Request) {
@@ -1877,6 +1950,142 @@ func (s *Server) handleAttachmentDownload(w http.ResponseWriter, r *http.Request
 func (s *Server) handleAttachmentDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.Attachments.Delete(id); err != nil {
+		writeError(w, http.StatusNotFound, "attachment_not_found", err.Error())
+		return
+	}
+	s.publish("attachment.deleted", map[string]any{"id": id})
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+// ---- container attachments ----
+
+func (s *Server) requestEnvMeta(r *http.Request) (envdir.Meta, bool) {
+	if name := r.PathValue("name"); name != "" {
+		meta, _, ok := s.findEnvByName(name)
+		return meta, ok
+	}
+	meta, _, ok := s.findEnv(r.PathValue("id"))
+	return meta, ok
+}
+
+func (s *Server) containerAttachmentStore(meta envdir.Meta) *attachments.Store {
+	meta.FillPaths()
+	dir := meta.AttachmentDir
+	if dir == "" {
+		dir = filepath.Join(meta.Dir, "attachments")
+	}
+	return attachments.NewStore(dir, filepath.Join(dir, "attachments.json"))
+}
+
+func (s *Server) handleContainerAttachmentList(w http.ResponseWriter, r *http.Request) {
+	meta, ok := s.requestEnvMeta(r)
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	store := s.containerAttachmentStore(meta)
+	list, err := store.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "attachment_list_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"attachments": list, "root": store.Root()})
+}
+
+func (s *Server) handleContainerAttachmentAdd(w http.ResponseWriter, r *http.Request) {
+	meta, ok := s.requestEnvMeta(r)
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAttachmentSize+(1<<20))
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_upload", err.Error())
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_upload", "file field is required")
+		return
+	}
+	defer file.Close()
+	name := r.FormValue("name")
+	if name == "" && hdr != nil {
+		name = hdr.Filename
+	}
+	saved, err := s.containerAttachmentStore(meta).Save(name, file, maxAttachmentSize)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "attachment_save_failed", err.Error())
+		return
+	}
+	s.publish("attachment.created", saved)
+	writeJSON(w, http.StatusCreated, saved)
+}
+
+func (s *Server) handleContainerAttachmentGet(w http.ResponseWriter, r *http.Request) {
+	meta, ok := s.requestEnvMeta(r)
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	f, err := s.containerAttachmentStore(meta).Get(r.PathValue("aid"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "attachment_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
+}
+
+func (s *Server) handleContainerAttachmentRename(w http.ResponseWriter, r *http.Request) {
+	meta, ok := s.requestEnvMeta(r)
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	f, err := s.containerAttachmentStore(meta).Rename(r.PathValue("aid"), in.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "attachment_rename_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
+}
+
+func (s *Server) handleContainerAttachmentDownload(w http.ResponseWriter, r *http.Request) {
+	meta, ok := s.requestEnvMeta(r)
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	f, err := s.containerAttachmentStore(meta).Get(r.PathValue("aid"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "attachment_not_found", err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", f.Name))
+	if f.MIME != "" {
+		w.Header().Set("Content-Type", f.MIME)
+	}
+	http.ServeFile(w, r, f.Path)
+}
+
+func (s *Server) handleContainerAttachmentDelete(w http.ResponseWriter, r *http.Request) {
+	meta, ok := s.requestEnvMeta(r)
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	id := r.PathValue("aid")
+	if err := s.containerAttachmentStore(meta).Delete(id); err != nil {
 		writeError(w, http.StatusNotFound, "attachment_not_found", err.Error())
 		return
 	}
