@@ -143,30 +143,54 @@ func (s *Server) handleUserChrome(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "chrome_version_invalid", err.Error())
 		return
 	}
+	s.userMu.Lock()
 	old := s.User.ChromeVersion
 	s.User.ChromeVersion = strings.TrimSpace(in.Version)
 	if s.User.ChromeVersion == "default" {
 		s.User.ChromeVersion = ""
 	}
-	if err := s.User.Save(); err != nil {
+	err := s.User.Save()
+	u := s.User
+	if err != nil {
 		s.User.ChromeVersion = old
+	}
+	s.userMu.Unlock()
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "user_save_failed", err.Error())
 		return
 	}
-	s.Manager.SetUser(s.User)
-	writeJSON(w, http.StatusOK, s.User)
+	s.Manager.SetUser(u)
+	if s.MCP != nil {
+		s.MCP.SetUser(u)
+	}
+	if s.Jobs != nil {
+		s.Jobs.SetUser(u)
+	}
+	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *Server) handleUserChromeUnbind(w http.ResponseWriter, _ *http.Request) {
+	s.userMu.Lock()
 	old := s.User.ChromeVersion
 	s.User.ChromeVersion = ""
-	if err := s.User.Save(); err != nil {
+	err := s.User.Save()
+	u := s.User
+	if err != nil {
 		s.User.ChromeVersion = old
+	}
+	s.userMu.Unlock()
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "user_save_failed", err.Error())
 		return
 	}
-	s.Manager.SetUser(s.User)
-	writeJSON(w, http.StatusOK, s.User)
+	s.Manager.SetUser(u)
+	if s.MCP != nil {
+		s.MCP.SetUser(u)
+	}
+	if s.Jobs != nil {
+		s.Jobs.SetUser(u)
+	}
+	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *Server) handleEnvChrome(w http.ResponseWriter, r *http.Request) {

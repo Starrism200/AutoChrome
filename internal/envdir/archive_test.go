@@ -89,3 +89,20 @@ func TestImportRejectsTraversal(t *testing.T) {
 		t.Fatal("expected traversal error")
 	}
 }
+
+func TestNameTaken(t *testing.T) {
+	r := NewRegistry(filepath.Join(t.TempDir(), "envs.json"))
+	dir := t.TempDir()
+	if err := r.Put(Meta{ID: "a", Name: "alpha", Dir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	if !r.NameTaken("alpha", "") {
+		t.Fatal("expected alpha to be taken")
+	}
+	if r.NameTaken("alpha", "a") {
+		t.Fatal("same id should be ignored")
+	}
+	if r.NameTaken("a", "") != true {
+		t.Fatal("id should count as a name")
+	}
+}

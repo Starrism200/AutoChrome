@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"autochrome/internal/atomicfile"
@@ -42,6 +43,32 @@ func (r *Registry) Get(id string) (Meta, bool) {
 		}
 	}
 	return Meta{}, false
+}
+
+// NameTaken reports whether name is used by another environment (by name or id).
+func (r *Registry) NameTaken(name, ignoreID string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	list, err := r.List()
+	if err != nil {
+		return false
+	}
+	for _, m := range list {
+		if m.Dir != "" {
+			if _, err := os.Stat(m.Dir); err != nil {
+				continue
+			}
+		}
+		if m.ID == name && m.ID != ignoreID {
+			return true
+		}
+		if m.Name == name && m.ID != ignoreID {
+			return true
+		}
+	}
+	return false
 }
 
 // Put inserts or replaces an environment entry.

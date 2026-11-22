@@ -114,6 +114,7 @@ opencode / Claude Desktop / Cursor 等通用写法：
 | `autochrome://envs` | 当前用户的环境列表（JSON） |
 | `autochrome://sessions` | 当前存活的会话（JSON） |
 | `autochrome://desktop` | noVNC 地址与端口（启用 VNC 时） |
+| `autochrome://jobs` | 异步脚本任务列表 |
 
 ## 4. 推荐调用顺序
 

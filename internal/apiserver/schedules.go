@@ -207,11 +207,12 @@ func (s *Server) runScheduler(ctx context.Context) {
 func (s *Server) executeJob(j scheduler.Job) (any, error) {
 	switch j.Type {
 	case "script":
-		script, src, err := scripts.Load(s.User.ScriptRoot, j.Script)
+		u := s.userSnapshot()
+		script, src, err := scripts.Load(u.ScriptRoot, j.Script)
 		if err != nil {
 			return nil, err
 		}
-		runner := jsruntime.New(s.User, s.Manager, os.Stderr)
+		runner := jsruntime.New(u, s.Manager, os.Stderr)
 		runner.AllowEval = s.AllowEval
 		runner.AutoClose = true
 		runner.Timeout = script.TimeoutDuration()

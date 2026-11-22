@@ -75,7 +75,7 @@ Usage:
   autochrome script      list | run <name> [-input JSON]
   autochrome mcp         [-user USER] [--vnc] [--allow-eval] [--allow-scripts]
   autochrome desktop     [-user USER] [--vnc-password PASS] [--port-start N] [--port-end N]
-  autochrome serve       [-user USER] [-addr 127.0.0.1:8787] [--vnc] [--token TOKEN]
+  autochrome serve       [-user USER] [-addr 127.0.0.1:8787] [--mcp] [--vnc] [--token TOKEN]
 
 The default user keeps the historical layout (profiles/, scripts/custom/, data/).
 Other users live under data/users/<id>/.
@@ -113,6 +113,9 @@ func cmdGen(args []string) {
 			}
 		}
 		_ = reg.Delete(*id)
+	}
+	if reg.NameTaken(*id, "") {
+		log.Fatalf("container name %q already exists", *id)
 	}
 	if _, _, ok := envdir.Find(envRoot, *id); ok {
 		log.Fatalf("environment %q already exists", *id)
@@ -240,6 +243,9 @@ func cmdOpen(args []string) {
 	}
 	if hasMeta && meta.ID != "" && meta.ID != *id {
 		log.Fatalf("environment directory %q contains environment %q", dir, meta.ID)
+	}
+	if !hasMeta && registry.NameTaken(*id, "") {
+		log.Fatalf("container name %q already exists", *id)
 	}
 	fp := fingerprint.Generate(*id)
 	if hasMeta && meta.Fingerprint.UserAgent != "" {

@@ -92,9 +92,23 @@ func New(user users.User, sessions *session.Manager, allowEval bool, publish fun
 	return m
 }
 
+// SetUser updates storage-related user settings for future jobs.
+func (m *Manager) SetUser(u users.User) {
+	m.mu.Lock()
+	m.user = u
+	m.mu.Unlock()
+}
+
+func (m *Manager) userSnapshot() users.User {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.user
+}
+
 // Start validates the script and schedules it.
 func (m *Manager) Start(name string, input map[string]any, sessionID string) (Job, error) {
-	script, src, err := scripts.Load(m.user.ScriptRoot, name)
+	user := m.userSnapshot()
+	script, src, err := scripts.Load(user.ScriptRoot, name)
 	if err != nil {
 		return Job{}, err
 	}
@@ -116,13 +130,18 @@ func (m *Manager) Start(name string, input map[string]any, sessionID string) (Jo
 	m.jobs[id] = job
 	m.cancels[id] = cancel
 	err = m.persistLocked()
+	if err != nil {
+		delete(m.jobs, id)
+		delete(m.cancels, id)
+	} else {
+		m.wg.Add(1)
+	}
 	m.mu.Unlock()
 	if err != nil {
 		cancel()
 		return Job{}, err
 	}
 	m.emit("job.created", job)
-	m.wg.Add(1)
 	go m.run(ctx, id, src, script.TimeoutDuration(), runInput, logPath)
 	return job, nil
 }
@@ -219,7 +238,7 @@ func (m *Manager) run(ctx context.Context, id, src string, timeout time.Duration
 
 	m.setRunning(id)
 	logf("running")
-	runner := jsruntime.New(m.user, m.sessions, f)
+	runner := jsruntime.New(m.userSnapshot(), m.sessions, f)
 	runner.AllowEval = m.allowEval
 	runner.AutoClose = true
 	runner.Timeout = timeout

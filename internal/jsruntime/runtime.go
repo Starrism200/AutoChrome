@@ -195,6 +195,9 @@ func (r *Runner) buildAC(vm *goja.Runtime) *goja.Object {
 		if _, _, ok := envdir.Find(r.User.EnvRoot, id); ok {
 			panic(vm.NewGoError(fmt.Errorf("environment %q already exists", id)))
 		}
+		if r.Registry.NameTaken(id, "") {
+			panic(vm.NewGoError(fmt.Errorf("container name %q already exists", id)))
+		}
 		fp := fingerprint.Generate(id)
 		dir, err := envdir.Create(r.User.EnvRoot, platform, id, fp)
 		if err != nil {

@@ -54,6 +54,7 @@ type Server struct {
 	Addr         string
 	Token        string
 	tokenMu      sync.RWMutex
+	userMu       sync.RWMutex
 	AllowOrigin  string
 	AllowEval    bool
 	AllowScripts bool
@@ -66,6 +67,7 @@ type Server struct {
 	Jobs         *jobs.Manager
 
 	EnableMCP  bool
+	MCP        *mcpserver.Server
 	MCPHandler http.Handler
 
 	interMu      sync.Mutex
@@ -101,23 +103,30 @@ func New(u users.User, chromePath string) *Server {
 	}
 }
 
+func (s *Server) userSnapshot() users.User {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+	return s.User
+}
+
 // Run starts the HTTP server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	s.Manager = session.NewManager(s.User, s.ChromePath)
+	s.Manager = session.NewManager(s.userSnapshot(), s.ChromePath)
 	if s.Desktop != nil {
 		s.Manager.SetDisplay(s.Desktop.Display())
 	}
 	defer s.Manager.CloseAll()
-	s.Jobs = jobs.New(s.User, s.Manager, s.AllowEval, s.publish)
+	s.Jobs = jobs.New(s.userSnapshot(), s.Manager, s.AllowEval, s.publish)
 	defer s.Jobs.Close()
 	if s.EnableMCP {
-		mcpSrv := mcpserver.New(s.User, s.ChromePath)
+		mcpSrv := mcpserver.New(s.userSnapshot(), s.ChromePath)
 		mcpSrv.Manager = s.Manager
 		mcpSrv.Desktop = s.Desktop
 		mcpSrv.Jobs = s.Jobs
 		mcpSrv.AllowEval = s.AllowEval
 		mcpSrv.AllowScripts = s.AllowScripts
 		mcpSrv.Build()
+		s.MCP = mcpSrv
 		s.MCPHandler = mcpSrv.Handler()
 	}
 	go s.monitorVNCTokens(ctx)
@@ -271,6 +280,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 	if s.MCPHandler != nil {
 		mux.Handle("/mcp", s.MCPHandler)
+		mux.Handle("/mcp/", s.MCPHandler)
 	}
 }
 
@@ -328,7 +338,7 @@ func (s *Server) handleTokenRotate(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	token := "ac_" + hex.EncodeToString(buf)
-	if err := SaveToken(s.User, token); err != nil {
+	if err := SaveToken(s.userSnapshot(), token); err != nil {
 		writeError(w, http.StatusInternalServerError, "token_rotate_failed", err.Error())
 		return
 	}
@@ -340,7 +350,7 @@ func (s *Server) handleTokenRotate(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleUser(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.User)
+	writeJSON(w, http.StatusOK, s.userSnapshot())
 }
 
 // ---- environments ----
@@ -350,12 +360,13 @@ func (s *Server) handleEnvList(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) listEnvs() []envdir.Meta {
+	u := s.userSnapshot()
 	byID := map[string]envdir.Meta{}
 	if list, err := s.Registry.List(); err == nil {
 		for _, m := range list {
 			dir := m.Dir
 			if dir == "" {
-				dir = filepath.Join(s.User.EnvRoot, envdir.Name(m.Platform, m.ID))
+				dir = filepath.Join(u.EnvRoot, envdir.Name(m.Platform, m.ID))
 			}
 			if _, err := os.Stat(dir); err != nil {
 				_ = s.Registry.Delete(m.ID)
@@ -364,7 +375,7 @@ func (s *Server) listEnvs() []envdir.Meta {
 			byID[m.ID] = m
 		}
 	}
-	if list, err := envdir.List(s.User.EnvRoot); err == nil {
+	if list, err := envdir.List(u.EnvRoot); err == nil {
 		for _, m := range list {
 			if _, ok := byID[m.ID]; ok {
 				continue
@@ -386,11 +397,12 @@ func (s *Server) findEnvByName(name string) (envdir.Meta, string, bool) {
 	if name == "" {
 		return envdir.Meta{}, "", false
 	}
+	u := s.userSnapshot()
 	for _, m := range s.listEnvs() {
 		if m.Name == name || m.ID == name {
 			dir := m.Dir
 			if dir == "" {
-				dir = filepath.Join(s.User.EnvRoot, envdir.Name(m.Platform, m.ID))
+				dir = filepath.Join(u.EnvRoot, envdir.Name(m.Platform, m.ID))
 			}
 			return m, dir, true
 		}
@@ -402,14 +414,14 @@ func (s *Server) findEnv(id string) (envdir.Meta, string, bool) {
 	if m, ok := s.Registry.Get(id); ok {
 		dir := m.Dir
 		if dir == "" {
-			dir = filepath.Join(s.User.EnvRoot, envdir.Name(m.Platform, m.ID))
+			dir = filepath.Join(s.userSnapshot().EnvRoot, envdir.Name(m.Platform, m.ID))
 		}
 		if _, err := os.Stat(dir); err == nil {
 			return m, dir, true
 		}
 		_ = s.Registry.Delete(id)
 	}
-	if m, dir, ok := envdir.Find(s.User.EnvRoot, id); ok {
+	if m, dir, ok := envdir.Find(s.userSnapshot().EnvRoot, id); ok {
 		_ = s.Registry.Put(m)
 		return m, dir, true
 	}
@@ -451,7 +463,7 @@ func (s *Server) handleEnvCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fp := fingerprint.Generate(in.ID)
-	dir, err := envdir.Create(s.User.EnvRoot, in.Platform, in.ID, fp)
+	dir, err := envdir.Create(s.userSnapshot().EnvRoot, in.Platform, in.ID, fp)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "env_create_failed", err.Error())
 		return
@@ -811,7 +823,7 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("json") == "1" {
 		out := map[string]any{"bytes": len(buf), "base64": base64.StdEncoding.EncodeToString(buf)}
 		if name := r.URL.Query().Get("name"); name != "" {
-			path := filepath.Join(s.User.ShotRoot, filepath.Base(name))
+			path := filepath.Join(s.userSnapshot().ShotRoot, filepath.Base(name))
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
 				if err := os.WriteFile(path, buf, 0o600); err == nil {
 					out["path"] = path
@@ -945,7 +957,7 @@ func (s *Server) handleScroll(w http.ResponseWriter, r *http.Request) {
 // ---- scripts ----
 
 func (s *Server) handleScriptList(w http.ResponseWriter, _ *http.Request) {
-	list, err := scripts.List(s.User.ScriptRoot)
+	list, err := scripts.List(s.userSnapshot().ScriptRoot)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "script_list_failed", err.Error())
 		return
@@ -954,7 +966,7 @@ func (s *Server) handleScriptList(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleScriptGet(w http.ResponseWriter, r *http.Request) {
-	script, src, err := scripts.Load(s.User.ScriptRoot, r.PathValue("name"))
+	script, src, err := scripts.Load(s.userSnapshot().ScriptRoot, r.PathValue("name"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "script_not_found", err.Error())
 		return
@@ -993,7 +1005,7 @@ func (s *Server) handleScriptWrite(w http.ResponseWriter, r *http.Request) {
 			manifest["inputSchema"] = in.InputSchema
 		}
 	}
-	if err := scripts.Write(s.User.ScriptRoot, r.PathValue("name"), in.Source, manifest); err != nil {
+	if err := scripts.Write(s.userSnapshot().ScriptRoot, r.PathValue("name"), in.Source, manifest); err != nil {
 		writeError(w, http.StatusBadRequest, "script_write_failed", err.Error())
 		return
 	}
@@ -1005,7 +1017,7 @@ func (s *Server) handleScriptDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "scripts_disabled", "scripts are disabled for this user")
 		return
 	}
-	if err := scripts.Delete(s.User.ScriptRoot, r.PathValue("name")); err != nil {
+	if err := scripts.Delete(s.userSnapshot().ScriptRoot, r.PathValue("name")); err != nil {
 		writeError(w, http.StatusNotFound, "script_not_found", err.Error())
 		return
 	}
@@ -1025,7 +1037,7 @@ func (s *Server) handleScriptRun(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	script, src, err := scripts.Load(s.User.ScriptRoot, name)
+	script, src, err := scripts.Load(s.userSnapshot().ScriptRoot, name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "script_not_found", err.Error())
 		return
@@ -1037,7 +1049,7 @@ func (s *Server) handleScriptRun(w http.ResponseWriter, r *http.Request) {
 	if in.SessionID != "" {
 		input["session_id"] = in.SessionID
 	}
-	runner := jsruntime.New(s.User, s.Manager, os.Stderr)
+	runner := jsruntime.New(s.userSnapshot(), s.Manager, os.Stderr)
 	runner.AllowEval = s.AllowEval
 	runner.AutoClose = true
 	runner.Timeout = script.TimeoutDuration()
@@ -1227,7 +1239,7 @@ func (s *Server) handleEnvDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "env_not_found", "environment not found")
 		return
 	}
-	if dir == s.User.Home || dir == s.User.EnvRoot || dir == s.User.AttachmentRoot || dir == filepath.Join(s.User.Home, "data") {
+	if dir == s.userSnapshot().Home || dir == s.userSnapshot().EnvRoot || dir == s.userSnapshot().AttachmentRoot || dir == filepath.Join(s.userSnapshot().Home, "data") {
 		writeError(w, http.StatusBadRequest, "unsafe_path", "refusing to delete a storage root")
 		return
 	}
@@ -1586,12 +1598,13 @@ func (s *Server) handleInteractionClickXY(w http.ResponseWriter, r *http.Request
 // ---- storage ----
 
 func (s *Server) storageInfo() map[string]any {
+	u := s.userSnapshot()
 	return map[string]any{
-		"env_root":        s.User.EnvRoot,
-		"attachment_root": s.User.AttachmentRoot,
-		"script_root":     s.User.ScriptRoot,
-		"screenshot_root": s.User.ShotRoot,
-		"data_root":       filepath.Join(s.User.Home, "data"),
+		"env_root":        u.EnvRoot,
+		"attachment_root": u.AttachmentRoot,
+		"script_root":     u.ScriptRoot,
+		"screenshot_root": u.ShotRoot,
+		"data_root":       filepath.Join(u.Home, "data"),
 	}
 }
 
@@ -1607,12 +1620,22 @@ func (s *Server) handleStoragePut(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	if err := s.User.SetStorage(in.EnvRoot, in.AttachmentRoot); err != nil {
+	s.userMu.Lock()
+	err := s.User.SetStorage(in.EnvRoot, in.AttachmentRoot)
+	u := s.User
+	s.userMu.Unlock()
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "storage_update_failed", err.Error())
 		return
 	}
-	s.Manager.SetUser(s.User)
-	s.Attachments.SetRoot(s.User.AttachmentRoot)
+	s.Manager.SetUser(u)
+	s.Attachments.SetRoot(u.AttachmentRoot)
+	if s.Jobs != nil {
+		s.Jobs.SetUser(u)
+	}
+	if s.MCP != nil {
+		s.MCP.SetUser(u)
+	}
 	s.publish("storage.updated", s.storageInfo())
 	writeJSON(w, http.StatusOK, s.storageInfo())
 }
@@ -1651,7 +1674,7 @@ func (s *Server) handleEnvImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	meta, dir, err := envdir.Import(s.User.EnvRoot, file)
+	meta, dir, err := envdir.Import(s.userSnapshot().EnvRoot, file)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "env_import_failed", err.Error())
 		return
@@ -1663,6 +1686,15 @@ func (s *Server) handleEnvImport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = s.Registry.Delete(meta.ID)
+	}
+	name := meta.Name
+	if name == "" {
+		name = meta.ID
+	}
+	if s.Registry.NameTaken(name, meta.ID) {
+		_ = envdir.RemoveDir(dir)
+		writeError(w, http.StatusConflict, "env_name_exists", fmt.Sprintf("container name %q already exists", name))
+		return
 	}
 	_ = s.Registry.Put(meta)
 	writeJSON(w, http.StatusCreated, map[string]any{"env": meta, "dir": dir})

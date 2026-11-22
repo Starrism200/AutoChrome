@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -40,6 +41,8 @@ type Server struct {
 	Registry     *envdir.Registry
 	Jobs         *jobs.Manager
 	mcpServer    *mcp.Server
+	buildOnce    sync.Once
+	userMu       sync.RWMutex
 }
 
 // New returns a server for user.
@@ -51,6 +54,19 @@ func New(u users.User, chrome string) *Server {
 		AllowScripts: u.AllowScripts,
 		Registry:     envdir.NewRegistry(u.RegistryPath()),
 	}
+}
+
+// SetUser updates storage-related user settings.
+func (s *Server) SetUser(u users.User) {
+	s.userMu.Lock()
+	s.User = u
+	s.userMu.Unlock()
+}
+
+func (s *Server) userSnapshot() users.User {
+	s.userMu.RLock()
+	defer s.userMu.RUnlock()
+	return s.User
 }
 
 // Build creates (once) the MCP server with all tools and resources.
@@ -77,14 +93,15 @@ func (s *Server) Handler() http.Handler {
 // Run starts the stdio MCP server and blocks until the client disconnects.
 func (s *Server) Run(ctx context.Context) error {
 	if s.Manager == nil {
-		s.Manager = session.NewManager(s.User, s.Chrome)
+		u := s.userSnapshot()
+		s.Manager = session.NewManager(u, s.Chrome)
 		if s.Desktop != nil {
 			s.Manager.SetDisplay(s.Desktop.Display())
 		}
 		defer s.Manager.CloseAll()
 	}
 	if s.Jobs == nil {
-		s.Jobs = jobs.New(s.User, s.Manager, s.AllowEval, nil)
+		s.Jobs = jobs.New(s.userSnapshot(), s.Manager, s.AllowEval, nil)
 		defer s.Jobs.Close()
 	}
 	return s.Build().Run(ctx, &mcp.StdioTransport{})
@@ -202,7 +219,8 @@ func (s *Server) envCreate(_ context.Context, _ *mcp.CallToolRequest, in EnvCrea
 		platform = "default"
 	}
 	fp := fingerprint.Generate(in.ID)
-	dir, err := envdir.Create(s.User.EnvRoot, platform, in.ID, fp)
+	user := s.userSnapshot()
+	dir, err := envdir.Create(user.EnvRoot, platform, in.ID, fp)
 	if err != nil {
 		return nil, EnvCreateOut{}, err
 	}
@@ -221,12 +239,13 @@ func (s *Server) envList(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) 
 }
 
 func (s *Server) listEnvs() []envdir.Meta {
+	u := s.userSnapshot()
 	byID := map[string]envdir.Meta{}
 	if list, err := s.Registry.List(); err == nil {
 		for _, m := range list {
 			dir := m.Dir
 			if dir == "" {
-				dir = filepath.Join(s.User.EnvRoot, envdir.Name(m.Platform, m.ID))
+				dir = filepath.Join(u.EnvRoot, envdir.Name(m.Platform, m.ID))
 			}
 			if _, err := os.Stat(dir); err != nil {
 				_ = s.Registry.Delete(m.ID)
@@ -235,7 +254,7 @@ func (s *Server) listEnvs() []envdir.Meta {
 			byID[m.ID] = m
 		}
 	}
-	if list, err := envdir.List(s.User.EnvRoot); err == nil {
+	if list, err := envdir.List(u.EnvRoot); err == nil {
 		for _, m := range list {
 			if _, ok := byID[m.ID]; ok {
 				continue
@@ -493,7 +512,7 @@ func (s *Server) browserScreenshot(_ context.Context, _ *mcp.CallToolRequest, in
 	if in.Path != "" {
 		path := in.Path
 		if !filepath.IsAbs(path) {
-			path = filepath.Join(s.User.ShotRoot, path)
+			path = filepath.Join(s.userSnapshot().ShotRoot, path)
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return nil, ScreenshotOut{}, err
@@ -677,7 +696,7 @@ type ScriptListOut struct {
 }
 
 func (s *Server) scriptList(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ScriptListOut, error) {
-	list, err := scripts.List(s.User.ScriptRoot)
+	list, err := scripts.List(s.userSnapshot().ScriptRoot)
 	if err != nil {
 		return nil, ScriptListOut{}, err
 	}
@@ -694,11 +713,11 @@ func (s *Server) scriptRun(_ context.Context, _ *mcp.CallToolRequest, in ScriptR
 	if !s.AllowScripts {
 		return nil, nil, fmt.Errorf("scripts are disabled for this user")
 	}
-	script, src, err := scripts.Load(s.User.ScriptRoot, in.Name)
+	script, src, err := scripts.Load(s.userSnapshot().ScriptRoot, in.Name)
 	if err != nil {
 		return nil, nil, err
 	}
-	runner := jsruntime.New(s.User, s.Manager, os.Stderr)
+	runner := jsruntime.New(s.userSnapshot(), s.Manager, os.Stderr)
 	runner.AllowEval = s.AllowEval
 	runner.AutoClose = true
 	runner.Timeout = script.TimeoutDuration()

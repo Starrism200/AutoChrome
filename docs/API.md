@@ -418,8 +418,9 @@ curl -s -H "$H" "$BASE/sessions/$SID/screenshot?json=1&name=shot.png"
 ### 事件流
 
 `GET /api/v1/events` 返回 `text/event-stream`，事件包括
-`session.opened`、`session.closed`、`env.created`、`env.deleted`、
-`proxy.*`、`storage.updated`、`attachment.*`、`schedule.*`、`token.rotated` 等。
+`session.opened`、`session.closed`、`env.created`、`env.updated`、
+`env.deleted`、`proxy.*`、`storage.updated`、`attachment.*`、
+`job.created`、`job.updated`、`schedule.*`、`token.rotated` 等。
 浏览器端建议用 `fetch` 流式读取并携带 Bearer token。
 
 ### 调度

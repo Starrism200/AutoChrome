@@ -173,6 +173,9 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool, chrome
 	if hasMeta && meta.ID != "" && meta.ID != envID {
 		return nil, fmt.Errorf("environment directory %q contains environment %q", dir, meta.ID)
 	}
+	if !hasMeta && m.registry.NameTaken(envID, "") {
+		return nil, fmt.Errorf("container name %q already exists", envID)
+	}
 	fp := fingerprint.Generate(envID)
 	if hasMeta && meta.Fingerprint.UserAgent != "" {
 		fp = meta.Fingerprint
