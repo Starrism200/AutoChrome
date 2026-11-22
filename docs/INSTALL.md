@@ -4,7 +4,7 @@
 
 - Debian / Ubuntu（`install.sh` 使用 `apt-get`）
 - 需要 root 权限安装系统包
-- 已测试 Chrome 156 / Xvfb / Go 1.27
+- 已在 Linux + Google Chrome + Xvfb + Go 1.25+ 环境验证
 
 其它发行版可手动安装 Chrome、Xvfb 和字体后直接执行构建：
 
@@ -21,7 +21,7 @@ build
 | `xvfb` | 虚拟显示器（无物理屏幕时有头运行 Chrome） | apt |
 | `fonts-liberation` | 基础字体，避免页面渲染异常 | apt |
 | `ca-certificates` / `curl` | 下载 Chrome | apt |
-| Go 1.25+ | 编译 | 手动或 `/opt/go1.27` |
+| Go 1.25+ | 编译 | 手动安装或用 `GO_BIN` 指定 |
 
 ## 3. 首次安装
 
@@ -42,8 +42,14 @@ sudo ./install.sh
 `GO_BIN` 选择顺序：
 
 1. 环境变量 `GO_BIN`
-2. `/opt/go1.27/bin/go`（存在时）
-3. `PATH` 中的 `go`
+2. `PATH` 中版本满足 1.25+ 的 `go`
+3. `/usr/local/go/bin/go` 或 `/opt/go*/bin/go`（版本满足时）
+
+也可以在执行脚本前显式指定：
+
+```bash
+GO_BIN=/usr/local/go/bin/go ./install.sh
+```
 
 ## 4. 更新
 

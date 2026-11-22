@@ -53,7 +53,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `autochrome - browser + virtual display toolkit
 
 Usage:
-  autochrome gen         -id <id> [-platform tiktok] [-root profiles]
+  autochrome gen         -id <id> [-platform NAME] [-root profiles]
   autochrome fingerprint -id <id>
   autochrome open        -id <id> [-url URL] [-proxy ADDR] [options]
 
@@ -66,7 +66,7 @@ func cmdGen(args []string) {
 	fs := flag.NewFlagSet("gen", flag.ExitOnError)
 	root := fs.String("root", "profiles", "root directory for environment directories")
 	id := fs.String("id", "", "environment id (required)")
-	platform := fs.String("platform", "tiktok", "platform name used in the directory name")
+	platform := fs.String("platform", "default", "platform name used in the directory name")
 	_ = fs.Parse(args)
 
 	if *id == "" {
@@ -96,7 +96,7 @@ func cmdOpen(args []string) {
 	fs := flag.NewFlagSet("open", flag.ExitOnError)
 	root := fs.String("root", "profiles", "root directory for environment directories")
 	id := fs.String("id", "", "environment id (required)")
-	platform := fs.String("platform", "tiktok", "platform name used in the directory name")
+	platform := fs.String("platform", "default", "platform name used in the directory name")
 	chrome := fs.String("chrome", "/usr/bin/google-chrome", "Chrome executable")
 	proxy := fs.String("proxy", "", "proxy address, e.g. socks5://127.0.0.1:10801")
 	url := fs.String("url", "https://example.com", "page to open")

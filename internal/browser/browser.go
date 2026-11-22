@@ -252,11 +252,6 @@ func SaveCookiesFor(ctx context.Context, urls []string, path string) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// SaveCookies writes the current tiktok.com cookies as JSON.
-func SaveCookies(ctx context.Context, path string) error {
-	return SaveCookiesFor(ctx, []string{"https://www.tiktok.com", "https://www.tiktok.com/"}, path)
-}
-
 func EvalString(ctx context.Context, expr string) (string, error) {
 	return chromedp.Run(ctx, chromedp.Evaluate[string](expr))
 }

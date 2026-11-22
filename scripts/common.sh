@@ -4,11 +4,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+go_ok() {
+  "$1" version 2>/dev/null | grep -qE 'go1\.(2[5-9]|[3-9][0-9])'
+}
+
 if [ -z "${GO_BIN:-}" ]; then
-  if [ -x /opt/go1.27/bin/go ]; then
-    GO_BIN=/opt/go1.27/bin/go
-  else
-    GO_BIN=go
+  GO_BIN=go
+  if ! command -v "$GO_BIN" >/dev/null 2>&1 || ! go_ok "$GO_BIN"; then
+    for candidate in /usr/local/go/bin/go /opt/go*/bin/go; do
+      if [ -x "$candidate" ] && go_ok "$candidate"; then
+        GO_BIN="$candidate"
+        break
+      fi
+    done
   fi
 fi
 

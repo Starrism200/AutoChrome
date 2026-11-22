@@ -44,13 +44,13 @@ cmd := browserexec.Command("xvfb-run", "/usr/bin/google-chrome", "--version")
 ## 3. 环境目录
 
 ```bash
-./bin/autochrome gen -id account-01 -platform tiktok -root profiles
+./bin/autochrome gen -id account-01 -root profiles
 ```
 
 生成：
 
 ```text
-profiles/tiktok-account-01/
+profiles/default-account-01/
 └── env.json
 ```
 
@@ -59,8 +59,8 @@ profiles/tiktok-account-01/
 ```json
 {
   "id": "account-01",
-  "platform": "tiktok",
-  "dir": "/abs/path/profiles/tiktok-account-01",
+  "platform": "default",
+  "dir": "/abs/path/profiles/default-account-01",
   "created_at": "2026-11-22T10:00:00Z",
   "fingerprint": {
     "user_agent": "...",
@@ -82,8 +82,7 @@ profiles/tiktok-account-01/
 目录名规则：`<platform>-<sanitized id>`。`id` 中不安全字符会被替换为 `_`，
 最长 80 字符。
 
-环境目录是 Chrome 的 `--user-data-dir`，包含 Cookie、localStorage 等登录态，
-应视为敏感数据。
+环境目录是 Chrome 的 `--user-data-dir`，包含 Cookie、localStorage 等浏览器状态。
 
 ## 4. 指纹生成
 
@@ -148,7 +147,7 @@ profiles/tiktok-account-01/
 - 命令行：`-slot-dir`、`-slot-max`
 - 等待超时默认 10 分钟
 
-因为锁是文件级的，面板、守护进程和 CLI 可以共享同一个上限。
+因为锁是文件级的，多个进程可以共享同一个上限。
 
 ## 7. 代理
 
@@ -168,7 +167,7 @@ profiles/tiktok-account-01/
 
 - `Launch` / `emulateDesktop`
 - `Screenshot`
-- `SaveCookiesFor` / `SaveCookies`
+- `SaveCookiesFor`
 - `EvalString` / `WaitString` / `WaitSelector` / `WaitEnabled` / `WaitButtonText`
 - `Activate` / `ActivateByText` / `ClickByText`（聚焦 + 真实 Enter 键）
 - `Fill`（Click + SendKeys）
@@ -186,7 +185,7 @@ profiles/tiktok-account-01/
 ./bin/autochrome open -id test -url https://example.com -screenshot /tmp/a.png
 
 # 3. 查看环境元数据
-cat profiles/tiktok-test/env.json
+cat profiles/default-test/env.json
 
 # 4. 验证代理出口（示例）
 curl -x socks5h://127.0.0.1:10801 https://ipinfo.io/json

@@ -1,7 +1,7 @@
 // Package browserslot limits how many browsers run at once across processes.
 //
 // The limit is enforced with advisory flock on a fixed set of slot files, so
-// the panel, daemon and CLI tools all share the same cap.
+// multiple processes share the same cap.
 package browserslot
 
 import (

@@ -1,6 +1,6 @@
 module autochrome
 
-go 1.26
+go 1.25
 
 require (
 	github.com/chromedp/cdproto v0.157.8

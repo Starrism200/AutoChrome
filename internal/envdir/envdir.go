@@ -56,14 +56,9 @@ func Root(fallback string) string {
 func Name(platform, id string) string {
 	p := strings.ToLower(strings.TrimSpace(platform))
 	if p == "" {
-		p = "tiktok"
+		p = "default"
 	}
 	return p + "-" + Sanitize(id)
-}
-
-// LegacyName is the pre-migration TikTok naming scheme: NN-user.
-func LegacyName(index int, user string) string {
-	return fmt.Sprintf("%02d-%s", index, Sanitize(user))
 }
 
 // Create makes the environment directory and writes its metadata file.
@@ -110,78 +105,4 @@ func ReadMeta(dir string) (Meta, bool) {
 		return Meta{}, false
 	}
 	return m, true
-}
-
-// Resolve returns the directory an account should use. stored wins; otherwise
-// the legacy directory is reused when it exists; otherwise a new directory
-// name is returned (but not created).
-func Resolve(stored, root, platform, id, legacy string) string {
-	if strings.TrimSpace(stored) != "" {
-		return stored
-	}
-	if legacy != "" {
-		if st, err := os.Stat(legacy); err == nil && st.IsDir() {
-			return legacy
-		}
-	}
-	return filepath.Join(root, Name(platform, id))
-}
-
-type PanelEntry struct {
-	ID          string `json:"id"`
-	Platform    string `json:"platform"`
-	Credentials string `json:"credentials"`
-	Proxy       string `json:"proxy"`
-	EnvDir      string `json:"env_dir"`
-	Fingerprint string `json:"fingerprint"`
-}
-
-// LookupPanel finds a panel login entry by id, or by the username part of its
-// credentials. It returns false when the snapshot is missing or has no match.
-func LookupPanel(path, id, user string) (PanelEntry, bool) {
-	if strings.TrimSpace(path) == "" {
-		return PanelEntry{}, false
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return PanelEntry{}, false
-	}
-	var entries []PanelEntry
-	if err := json.Unmarshal(b, &entries); err != nil {
-		return PanelEntry{}, false
-	}
-	for _, e := range entries {
-		if id != "" && e.ID == id {
-			return e, true
-		}
-		if id == "" && user != "" && strings.TrimSpace(strings.SplitN(e.Credentials, "----", 2)[0]) == user {
-			return e, true
-		}
-	}
-	return PanelEntry{}, false
-}
-
-// Migration is one planned rename from the legacy scheme.
-type Migration struct {
-	ID     string
-	OldDir string
-	NewDir string
-}
-
-// PlanMigration returns moves for accounts that still use legacy paths.
-func PlanMigration(stored, root, platform, id, legacy string) (Migration, bool) {
-	if strings.TrimSpace(stored) != "" {
-		return Migration{}, false
-	}
-	if legacy == "" {
-		return Migration{}, false
-	}
-	if st, err := os.Stat(legacy); err != nil || !st.IsDir() {
-		return Migration{}, false
-	}
-	newDir := filepath.Join(root, Name(platform, id))
-	if _, err := os.Stat(newDir); err == nil {
-		return Migration{}, false
-	}
-	return Migration{ID: id, OldDir: legacy, NewDir: newDir}, true
 }
