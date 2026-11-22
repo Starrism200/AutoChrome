@@ -31,6 +31,7 @@ English | [简体中文](README.zh-CN.md)
 - Remote MCP over Streamable HTTP (`serve --mcp`)
 - Asynchronous script jobs with persistent logs and cancellation
 - Restart sessions/containers without restarting the service
+- Refreshing `/vnc?token=...` relaunches a closed browser automatically
 - Per-container Chrome viewport size (default 1366x900, 1920x1080 supported)
 - 1920x1080 VNC canvas by default; override with `--vnc-screen`
 - OpenAPI document at `/api/v1/openapi.yaml`

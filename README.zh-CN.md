@@ -28,6 +28,7 @@
 - 远程 MCP（Streamable HTTP，`serve --mcp`）
 - 异步脚本任务，带持久化日志和取消
 - 不需要重启服务即可重新拉起会话/容器
+- 刷新 `/vnc?token=...` 会自动拉起已关闭的浏览器
 - 容器级 Chrome 视口大小（默认 1366x900，支持 1920x1080）
 - VNC 画布默认 1920x1080，可用 `--vnc-screen` 覆盖
 - OpenAPI 文档：`/api/v1/openapi.yaml`

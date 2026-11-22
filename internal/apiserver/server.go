@@ -2082,8 +2082,59 @@ func (s *Server) handleBrowserAccess(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "vnc_disabled", "VNC is not enabled")
 		return
 	}
+	if err := s.ensureBrowser(r.URL.Query().Get("env")); err != nil {
+		writeError(w, http.StatusBadGateway, "browser_unavailable", err.Error())
+		return
+	}
 	vt := s.newVNCToken(s.Desktop.Info().WebPort)
 	http.Redirect(w, r, "/vnc/"+vt+"/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=vnc/"+vt+"/websockify", http.StatusFound)
+}
+
+func (s *Server) ensureBrowser(envID string) error {
+	envID = strings.TrimSpace(envID)
+	if envID == "" {
+		sessions := s.Manager.List()
+		if len(sessions) > 0 {
+			envID = sessions[len(sessions)-1].EnvID
+		}
+	}
+	if envID == "" {
+		envs := s.listEnvs()
+		if len(envs) == 0 {
+			return fmt.Errorf("no containers; create one first")
+		}
+		best := ""
+		bestTime := ""
+		for _, e := range envs {
+			t := e.UpdatedAt
+			if t == "" {
+				t = e.CreatedAt
+			}
+			if t > bestTime {
+				bestTime, best = t, e.ID
+			}
+		}
+		envID = best
+	}
+	if existing, ok := s.Manager.SessionForEnv(envID); ok {
+		err := existing.Do(func(ctx context.Context) error {
+			loc, e := browser.Location(ctx)
+			if e != nil {
+				return e
+			}
+			if strings.TrimSpace(loc) == "" || loc == "about:blank" {
+				return fmt.Errorf("no active page")
+			}
+			return nil
+		})
+		if err == nil {
+			return nil
+		}
+		_, err = s.Manager.Restart(existing.ID, "")
+		return err
+	}
+	_, err := s.Manager.Open(envID, "", "about:blank", "", false, "")
+	return err
 }
 
 // ---- helpers ----

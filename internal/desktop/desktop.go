@@ -128,6 +128,7 @@ func Start(cfg Config) (*Desktop, error) {
 		"-localhost",
 		"-rfbport", strconv.Itoa(rfbPort),
 		"-forever", "-shared", "-quiet", "-noxdamage",
+		"-skip_lockkeys",
 	}
 	if passFile != "" {
 		x11Args = append(x11Args, "-rfbauth", passFile)
