@@ -16,3 +16,6 @@
 
 # local environment
 .env
+
+# browser profile lock
+.autochrome.lock

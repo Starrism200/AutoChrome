@@ -57,6 +57,7 @@ type Manager struct {
 
 	mu              sync.Mutex
 	sessions        map[string]*Session
+	opening         map[string]bool
 	display         *xvfb.Display
 	externalDisplay *xvfb.Display
 }
@@ -71,6 +72,7 @@ func NewManager(user users.User, chrome string) *Manager {
 		chrome:   chrome,
 		registry: envdir.NewRegistry(user.RegistryPath()),
 		sessions: map[string]*Session{},
+		opening:  map[string]bool{},
 	}
 }
 
@@ -128,6 +130,26 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Sess
 	if platform == "" {
 		platform = "default"
 	}
+	m.mu.Lock()
+	for _, existing := range m.sessions {
+		if existing.EnvID == envID {
+			id := existing.ID
+			m.mu.Unlock()
+			return nil, fmt.Errorf("environment %q is already open (session %s)", envID, id)
+		}
+	}
+	if m.opening[envID] {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("environment %q is already opening", envID)
+	}
+	m.opening[envID] = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.opening, envID)
+		m.mu.Unlock()
+	}()
+
 	user := m.userSnapshot()
 	var dir string
 	var meta envdir.Meta
@@ -136,15 +158,28 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool) (*Sess
 		dir, meta, hasMeta = reg.Dir, reg, true
 	} else {
 		dir = filepath.Join(user.EnvRoot, envdir.Name(platform, envID))
-		meta, hasMeta = envdir.ReadMeta(dir)
+	}
+	if stored, ok := envdir.ReadMeta(dir); ok {
+		if stored.ID != "" && stored.ID != envID {
+			return nil, fmt.Errorf("environment directory %q contains environment %q", dir, stored.ID)
+		}
+		meta, hasMeta = stored, true
+	}
+	if hasMeta && meta.ID != "" && meta.ID != envID {
+		return nil, fmt.Errorf("environment directory %q contains environment %q", dir, meta.ID)
 	}
 	fp := fingerprint.Generate(envID)
 	if hasMeta && meta.Fingerprint.UserAgent != "" {
 		fp = meta.Fingerprint
-	} else {
+	}
+	if _, ok := envdir.ReadMeta(dir); !ok {
 		created, err := envdir.CreateAt(dir, platform, envID, fp)
 		if err != nil {
 			return nil, err
+		}
+		if hasMeta {
+			created.ProxyID, created.Proxy = meta.ProxyID, meta.Proxy
+			_, _ = envdir.SetProxyDir(dir, created, created.ProxyID, created.Proxy)
 		}
 		meta, hasMeta = created, true
 	}

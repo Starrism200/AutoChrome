@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ var refPattern = regexp.MustCompile(`^e[0-9]+$`)
 type Runner struct {
 	User       users.User
 	Manager    *session.Manager
+	Registry   *envdir.Registry
 	Log        io.Writer
 	AllowEval  bool
 	AutoClose  bool
@@ -43,7 +45,10 @@ func New(user users.User, mgr *session.Manager, logw io.Writer) *Runner {
 	if logw == nil {
 		logw = os.Stderr
 	}
-	return &Runner{User: user, Manager: mgr, Log: logw, Timeout: 60 * time.Second}
+	return &Runner{
+		User: user, Manager: mgr, Log: logw, Timeout: 60 * time.Second,
+		Registry: envdir.NewRegistry(user.RegistryPath()),
+	}
 }
 
 // Run executes script with input and returns its exported result.
@@ -158,31 +163,68 @@ func (r *Runner) buildAC(vm *goja.Runtime) *goja.Object {
 			id = stringOpt(opts, "env")
 		}
 		platform := stringOpt(opts, "platform")
+		if id == "" {
+			panic(vm.NewGoError(fmt.Errorf("id is required")))
+		}
+		if m, ok := r.Registry.Get(id); ok {
+			if m.Dir != "" {
+				if _, err := os.Stat(m.Dir); err == nil {
+					panic(vm.NewGoError(fmt.Errorf("environment %q already exists", id)))
+				}
+			}
+			_ = r.Registry.Delete(id)
+		}
+		if _, _, ok := envdir.Find(r.User.EnvRoot, id); ok {
+			panic(vm.NewGoError(fmt.Errorf("environment %q already exists", id)))
+		}
 		fp := fingerprint.Generate(id)
 		dir, err := envdir.Create(r.User.EnvRoot, platform, id, fp)
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}
+		if meta, ok := envdir.ReadMeta(dir); ok {
+			_ = r.Registry.Put(meta)
+		}
 		return vm.ToValue(map[string]any{"dir": dir, "fingerprint": fp})
 	})
 	_ = env.Set("list", func(call goja.FunctionCall) goja.Value {
-		out := []envdir.Meta{}
-		entries, err := os.ReadDir(r.User.EnvRoot)
-		if err == nil {
-			for _, e := range entries {
-				if !e.IsDir() {
-					continue
-				}
-				if meta, ok := envdir.ReadMeta(filepath.Join(r.User.EnvRoot, e.Name())); ok {
-					out = append(out, meta)
-				}
-			}
-		}
-		return vm.ToValue(out)
+		return vm.ToValue(r.listEnvs())
 	})
 	_ = ac.Set("env", env)
 
 	return ac
+}
+
+func (r *Runner) listEnvs() []envdir.Meta {
+	byID := map[string]envdir.Meta{}
+	if list, err := r.Registry.List(); err == nil {
+		for _, m := range list {
+			dir := m.Dir
+			if dir == "" {
+				dir = filepath.Join(r.User.EnvRoot, envdir.Name(m.Platform, m.ID))
+			}
+			if _, err := os.Stat(dir); err != nil {
+				_ = r.Registry.Delete(m.ID)
+				continue
+			}
+			byID[m.ID] = m
+		}
+	}
+	if list, err := envdir.List(r.User.EnvRoot); err == nil {
+		for _, m := range list {
+			if _, ok := byID[m.ID]; ok {
+				continue
+			}
+			byID[m.ID] = m
+			_ = r.Registry.Put(m)
+		}
+	}
+	out := make([]envdir.Meta, 0, len(byID))
+	for _, m := range byID {
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 func (r *Runner) pageObject(vm *goja.Runtime, s *session.Session) *goja.Object {
@@ -337,7 +379,7 @@ func (r *Runner) pageObject(vm *goja.Runtime, s *session.Session) *goja.Object {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				panic(vm.NewGoError(err))
 			}
-			if err := os.WriteFile(path, buf, 0o644); err != nil {
+			if err := os.WriteFile(path, buf, 0o600); err != nil {
 				panic(vm.NewGoError(err))
 			}
 			res["path"] = path

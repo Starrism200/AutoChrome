@@ -5,11 +5,14 @@ package browser
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -44,9 +47,28 @@ func Launch(opts Options) (context.Context, func(), error) {
 	if opts.ChromePath == "" {
 		opts.ChromePath = "/usr/bin/google-chrome"
 	}
-	// A browser killed by a deploy/restart can leave stale singleton links;
-	// Chrome then starts but CDP never attaches. Remove them before launch.
+	var profileLock *os.File
+	releaseProfile := func() {}
 	if opts.ProfileDir != "" {
+		if err := os.MkdirAll(opts.ProfileDir, 0o755); err != nil {
+			return nil, nil, err
+		}
+		lockPath := filepath.Join(opts.ProfileDir, ".autochrome.lock")
+		lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			_ = lf.Close()
+			return nil, nil, fmt.Errorf("profile is already in use: %s", opts.ProfileDir)
+		}
+		profileLock = lf
+		releaseProfile = func() {
+			_ = syscall.Flock(int(profileLock.Fd()), syscall.LOCK_UN)
+			_ = profileLock.Close()
+		}
+		// A browser killed by a deploy/restart can leave stale singleton links;
+		// Chrome then starts but CDP never attaches. Remove them before launch.
 		for _, name := range []string{"SingletonLock", "SingletonSocket", "SingletonCookie"} {
 			_ = os.Remove(filepath.Join(opts.ProfileDir, name))
 		}
@@ -73,10 +95,12 @@ func Launch(opts Options) (context.Context, func(), error) {
 	}
 	releaseSlot, slotErr := browserslot.Acquire(opts.SlotDir, opts.SlotMax, slotWait)
 	if slotErr != nil {
+		releaseProfile()
 		return nil, nil, slotErr
 	}
 
-	cacheDir := filepath.Join("/dev/shm", "autochrome-cache", filepath.Base(opts.ProfileDir))
+	profileHash := sha256.Sum256([]byte(opts.ProfileDir))
+	cacheDir := filepath.Join("/dev/shm", "autochrome-cache", hex.EncodeToString(profileHash[:8]))
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		cacheDir = ""
 	}
@@ -138,6 +162,7 @@ func Launch(opts Options) (context.Context, func(), error) {
 			_ = os.RemoveAll(cacheDir)
 		}
 		releaseSlot()
+		releaseProfile()
 	}
 	if err := chromedp.Do(ctx, emulateDesktop(fp, opts.Timezone)); err != nil {
 		cleanup()
@@ -237,7 +262,7 @@ func Screenshot(ctx context.Context, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, buf, 0o644)
+	return os.WriteFile(path, buf, 0o600)
 }
 
 // SaveCookiesFor writes the cookies for the given URLs as JSON.

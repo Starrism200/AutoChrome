@@ -63,7 +63,9 @@ const snapshotJS = `(() => {
     const name = (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || el.innerText || el.value || '')
       .replace(/\s+/g, ' ').trim().slice(0, 160);
     const node = {ref, role, name, tag};
-    if (typeof el.value === 'string' && el.value) node.value = el.value.slice(0, 160);
+    const sensitive = (el.type || '').toLowerCase() === 'password' ||
+      /password|passwd|secret|token|otp|one-time-code/i.test([el.name || '', el.id || '', el.autocomplete || ''].join(' '));
+    if (!sensitive && typeof el.value === 'string' && el.value) node.value = el.value.slice(0, 160);
     if (el.type) node.type = el.type;
     if (el.checked) node.checked = true;
     if (el.disabled) node.disabled = true;

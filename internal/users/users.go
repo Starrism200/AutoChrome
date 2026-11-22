@@ -231,18 +231,37 @@ func (u *User) applyPaths() {
 
 // SetStorage persists user-level environment and attachment roots.
 func (u *User) SetStorage(envRoot, attachmentRoot string) error {
+	newEnvPath, newEnv := u.EnvRootPath, u.EnvRoot
+	newAttPath, newAtt := u.AttachmentRootPath, u.AttachmentRoot
 	if envRoot != "" {
-		u.EnvRootPath = absPath(u.Home, envRoot)
-		u.EnvRoot = u.EnvRootPath
+		p := absPath(u.Home, envRoot)
+		if !validRoot(p) {
+			return fmt.Errorf("invalid env_root %q", envRoot)
+		}
+		newEnvPath, newEnv = p, p
 	}
 	if attachmentRoot != "" {
-		u.AttachmentRootPath = absPath(u.Home, attachmentRoot)
-		u.AttachmentRoot = u.AttachmentRootPath
+		p := absPath(u.Home, attachmentRoot)
+		if !validRoot(p) {
+			return fmt.Errorf("invalid attachment_root %q", attachmentRoot)
+		}
+		newAttPath, newAtt = p, p
 	}
+	oldEnvPath, oldEnv := u.EnvRootPath, u.EnvRoot
+	oldAttPath, oldAtt := u.AttachmentRootPath, u.AttachmentRoot
+	u.EnvRootPath, u.EnvRoot = newEnvPath, newEnv
+	u.AttachmentRootPath, u.AttachmentRoot = newAttPath, newAtt
 	if err := u.EnsureDirs(); err != nil {
+		u.EnvRootPath, u.EnvRoot = oldEnvPath, oldEnv
+		u.AttachmentRootPath, u.AttachmentRoot = oldAttPath, oldAtt
 		return err
 	}
-	return u.Save()
+	if err := u.Save(); err != nil {
+		u.EnvRootPath, u.EnvRoot = oldEnvPath, oldEnv
+		u.AttachmentRootPath, u.AttachmentRoot = oldAttPath, oldAtt
+		return err
+	}
+	return nil
 }
 
 // RegistryPath is the per-user environment index.
@@ -253,6 +272,11 @@ func (u User) RegistryPath() string {
 // AttachmentIndexPath is the per-user attachment index.
 func (u User) AttachmentIndexPath() string {
 	return filepath.Join(u.Home, "data", "users", u.ID, "attachments.json")
+}
+
+func validRoot(p string) bool {
+	clean := filepath.Clean(p)
+	return clean != "" && clean != "." && clean != string(os.PathSeparator)
 }
 
 func absPath(home, p string) string {

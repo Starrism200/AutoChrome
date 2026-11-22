@@ -246,6 +246,14 @@ func (s *Server) listEnvs() []envdir.Meta {
 	byID := map[string]envdir.Meta{}
 	if list, err := s.Registry.List(); err == nil {
 		for _, m := range list {
+			dir := m.Dir
+			if dir == "" {
+				dir = filepath.Join(s.User.EnvRoot, envdir.Name(m.Platform, m.ID))
+			}
+			if _, err := os.Stat(dir); err != nil {
+				_ = s.Registry.Delete(m.ID)
+				continue
+			}
 			byID[m.ID] = m
 		}
 	}
@@ -272,7 +280,10 @@ func (s *Server) findEnv(id string) (envdir.Meta, string, bool) {
 		if dir == "" {
 			dir = filepath.Join(s.User.EnvRoot, envdir.Name(m.Platform, m.ID))
 		}
-		return m, dir, true
+		if _, err := os.Stat(dir); err == nil {
+			return m, dir, true
+		}
+		_ = s.Registry.Delete(id)
 	}
 	m, dir, ok := envdir.Find(s.User.EnvRoot, id)
 	if ok {
@@ -295,6 +306,10 @@ func (s *Server) handleEnvCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Platform == "" {
 		in.Platform = "default"
+	}
+	if _, _, ok := s.findEnv(in.ID); ok {
+		writeError(w, http.StatusConflict, "env_exists", fmt.Sprintf("environment %q already exists", in.ID))
+		return
 	}
 	fp := fingerprint.Generate(in.ID)
 	dir, err := envdir.Create(s.User.EnvRoot, in.Platform, in.ID, fp)
@@ -596,7 +611,7 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 		if name := r.URL.Query().Get("name"); name != "" {
 			path := filepath.Join(s.User.ShotRoot, filepath.Base(name))
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-				if err := os.WriteFile(path, buf, 0o644); err == nil {
+				if err := os.WriteFile(path, buf, 0o600); err == nil {
 					out["path"] = path
 				}
 			}
@@ -605,6 +620,7 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
 	_, _ = w.Write(buf)
 }
@@ -681,6 +697,7 @@ func (s *Server) handleQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
 	_, _ = w.Write(buf)
 }
@@ -952,6 +969,10 @@ func (s *Server) handleEnvDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "env_not_found", "environment not found")
 		return
 	}
+	if dir == s.User.Home || dir == s.User.EnvRoot || dir == s.User.AttachmentRoot || dir == filepath.Join(s.User.Home, "data") {
+		writeError(w, http.StatusBadRequest, "unsafe_path", "refusing to delete a storage root")
+		return
+	}
 	s.Manager.CloseEnv(id)
 	if err := envdir.RemoveDir(dir); err != nil {
 		writeError(w, http.StatusInternalServerError, "env_delete_failed", err.Error())
@@ -1146,6 +1167,7 @@ func (s *Server) handleInteractionPage(w http.ResponseWriter, r *http.Request) {
 	}
 	base := "/i/" + r.PathValue("token")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(strings.ReplaceAll(interactionHTML, "__BASE__", base)))
 }
 
@@ -1191,6 +1213,7 @@ func (s *Server) handleInteractionScreenshot(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
 	_, _ = w.Write(buf)
 }
@@ -1210,6 +1233,7 @@ func (s *Server) handleInteractionQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
 	_, _ = w.Write(buf)
 }
@@ -1340,6 +1364,7 @@ func (s *Server) handleEnvExport(w http.ResponseWriter, r *http.Request) {
 		s.Manager.CloseEnv(meta.ID)
 	}
 	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", envdir.Sanitize(meta.ID)+".tar.gz"))
 	if err := envdir.Export(w, dir); err != nil {
 		fmt.Fprintf(os.Stderr, "env export %s: %v\n", meta.ID, err)
@@ -1352,6 +1377,9 @@ func (s *Server) handleEnvImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_upload", err.Error())
 		return
 	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_upload", "file field is required")
@@ -1362,6 +1390,14 @@ func (s *Server) handleEnvImport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "env_import_failed", err.Error())
 		return
+	}
+	if existing, ok := s.Registry.Get(meta.ID); ok && existing.Dir != "" && existing.Dir != dir {
+		if _, err := os.Stat(existing.Dir); err == nil {
+			_ = envdir.RemoveDir(dir)
+			writeError(w, http.StatusConflict, "env_exists", fmt.Sprintf("environment %q already exists at %s", meta.ID, existing.Dir))
+			return
+		}
+		_ = s.Registry.Delete(meta.ID)
 	}
 	_ = s.Registry.Put(meta)
 	writeJSON(w, http.StatusCreated, map[string]any{"env": meta, "dir": dir})
@@ -1385,6 +1421,9 @@ func (s *Server) handleAttachmentAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_upload", err.Error())
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
@@ -1434,6 +1473,7 @@ func (s *Server) handleAttachmentDownload(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "attachment_not_found", err.Error())
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", f.Name))
 	if f.MIME != "" {
 		w.Header().Set("Content-Type", f.MIME)
@@ -1529,7 +1569,9 @@ func (s *Server) applyAuthState(sess *session.Session, st AuthState) error {
 			p := &network.CookieParam{
 				Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path, URL: c.URL,
 				Secure: c.Secure, HTTPOnly: c.HTTPOnly,
-				SameSite: network.CookieSameSite(c.SameSite),
+			}
+			if c.SameSite != "" {
+				p.SameSite = network.CookieSameSite(c.SameSite)
 			}
 			if c.Expires > 0 {
 				p.Expires = cdp.TimeSinceEpoch(c.Expires)
@@ -1601,6 +1643,9 @@ func (s *Server) handleAuthImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_upload", err.Error())
 		return
 	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_upload", "file field is required")
@@ -1645,6 +1690,7 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }

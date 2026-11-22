@@ -84,6 +84,8 @@ func Import(root string, r io.Reader) (Meta, string, error) {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	const maxTotal = int64(4 << 30)
+	var total int64
 
 	for {
 		hdr, err := tr.Next()
@@ -110,10 +112,14 @@ func Import(root string, r io.Reader) (Meta, string, error) {
 				return Meta{}, "", err
 			}
 		case tar.TypeReg:
+			if hdr.Size < 0 || hdr.Size > maxTotal || total > maxTotal-hdr.Size {
+				return Meta{}, "", fmt.Errorf("archive too large")
+			}
+			total += hdr.Size
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return Meta{}, "", err
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 			if err != nil {
 				return Meta{}, "", err
 			}
@@ -154,6 +160,7 @@ func Import(root string, r io.Reader) (Meta, string, error) {
 	}
 	meta.Dir = target
 	if err := writeMeta(target, meta); err != nil {
+		_ = os.RemoveAll(target)
 		return Meta{}, "", err
 	}
 	return meta, target, nil
@@ -167,7 +174,7 @@ func within(root, target string) bool {
 
 func skipRuntimeFile(name string) bool {
 	switch name {
-	case "SingletonLock", "SingletonSocket", "SingletonCookie", "DevToolsActivePort":
+	case "SingletonLock", "SingletonSocket", "SingletonCookie", "DevToolsActivePort", ".autochrome.lock":
 		return true
 	}
 	return false

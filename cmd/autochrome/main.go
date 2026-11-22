@@ -103,13 +103,25 @@ func cmdGen(args []string) {
 	if envRoot == "" {
 		envRoot = u.EnvRoot
 	}
+	reg := envdir.NewRegistry(u.RegistryPath())
+	if m, ok := reg.Get(*id); ok {
+		if m.Dir != "" {
+			if _, err := os.Stat(m.Dir); err == nil {
+				log.Fatalf("environment %q already exists", *id)
+			}
+		}
+		_ = reg.Delete(*id)
+	}
+	if _, _, ok := envdir.Find(envRoot, *id); ok {
+		log.Fatalf("environment %q already exists", *id)
+	}
 	fp := fingerprint.Generate(*id)
 	dir, err := envdir.Create(envRoot, *platform, *id, fp)
 	if err != nil {
 		log.Fatalf("create environment: %v", err)
 	}
 	if meta, ok := envdir.ReadMeta(dir); ok {
-		_ = envdir.NewRegistry(u.RegistryPath()).Put(meta)
+		_ = reg.Put(meta)
 	}
 	fmt.Printf("user=%s\n", u.ID)
 	fmt.Printf("env_dir=%s\n", dir)
@@ -168,15 +180,17 @@ func cmdOpen(args []string) {
 		defer d.Close()
 		displayEnv = d.Display().Env()
 		log.Printf("vnc: %s (display %s)", d.Info().URL, d.Info().Display)
+		if !*keep {
+			log.Printf("vnc: add -keep to keep the browser and VNC open")
+		}
+		if *headless {
+			log.Printf("vnc: headless mode is enabled; the VNC display will be empty")
+		}
 	}
 
 	envRoot := *root
 	if envRoot == "" {
 		envRoot = u.EnvRoot
-	}
-	proxyAddr := *proxy
-	if proxyAddr == "" {
-		proxyAddr = u.DefaultProxy
 	}
 	slot := *slotDir
 	if slot == "" {
@@ -187,12 +201,62 @@ func cmdOpen(args []string) {
 		max = u.BrowserMax()
 	}
 
+	registry := envdir.NewRegistry(u.RegistryPath())
+	var dir string
+	var meta envdir.Meta
+	hasMeta := false
+	if *root == "" {
+		if m, ok := registry.Get(*id); ok && m.Dir != "" {
+			dir, meta, hasMeta = m.Dir, m, true
+		}
+	}
+	if dir == "" {
+		dir = filepath.Join(envRoot, envdir.Name(*platform, *id))
+	}
+	if *root != "" {
+		if m, ok := registry.Get(*id); ok && m.Dir != "" && filepath.Clean(m.Dir) != filepath.Clean(dir) {
+			if _, err := os.Stat(m.Dir); err == nil {
+				log.Fatalf("environment %q already exists at %s", *id, m.Dir)
+			}
+			_ = registry.Delete(*id)
+		}
+	}
+	if stored, ok := envdir.ReadMeta(dir); ok {
+		if stored.ID != "" && stored.ID != *id {
+			log.Fatalf("environment directory %q contains environment %q", dir, stored.ID)
+		}
+		meta, hasMeta = stored, true
+	}
+	if hasMeta && meta.ID != "" && meta.ID != *id {
+		log.Fatalf("environment directory %q contains environment %q", dir, meta.ID)
+	}
 	fp := fingerprint.Generate(*id)
-	dir := filepath.Join(envRoot, envdir.Name(*platform, *id))
-	if meta, ok := envdir.ReadMeta(dir); ok && meta.Fingerprint.UserAgent != "" {
+	if hasMeta && meta.Fingerprint.UserAgent != "" {
 		fp = meta.Fingerprint
-	} else if _, err := envdir.Create(envRoot, *platform, *id, fp); err != nil {
-		log.Fatalf("create environment: %v", err)
+	}
+	if _, ok := envdir.ReadMeta(dir); !ok {
+		created, err := envdir.CreateAt(dir, *platform, *id, fp)
+		if err != nil {
+			log.Fatalf("create environment: %v", err)
+		}
+		if hasMeta {
+			created.ProxyID, created.Proxy = meta.ProxyID, meta.Proxy
+			_, _ = envdir.SetProxyDir(dir, created, created.ProxyID, created.Proxy)
+		}
+		meta, hasMeta = created, true
+	}
+	meta.ID, meta.Dir = *id, dir
+	if meta.Platform == "" {
+		meta.Platform = *platform
+	}
+	_ = registry.Put(meta)
+
+	proxyAddr := *proxy
+	if proxyAddr == "" && hasMeta {
+		proxyAddr = meta.Proxy
+	}
+	if proxyAddr == "" {
+		proxyAddr = u.DefaultProxy
 	}
 
 	ctx, cleanup, err := browser.Launch(browser.Options{

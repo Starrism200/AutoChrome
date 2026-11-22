@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -34,6 +35,7 @@ type Server struct {
 	AllowScripts bool
 	Manager      *session.Manager
 	Desktop      *desktop.Desktop
+	Registry     *envdir.Registry
 }
 
 // New returns a server for user.
@@ -43,6 +45,7 @@ func New(u users.User, chrome string) *Server {
 		Chrome:       chrome,
 		AllowEval:    u.AllowEval,
 		AllowScripts: u.AllowScripts,
+		Registry:     envdir.NewRegistry(u.RegistryPath()),
 	}
 }
 
@@ -162,6 +165,9 @@ func (s *Server) envCreate(_ context.Context, _ *mcp.CallToolRequest, in EnvCrea
 	if err != nil {
 		return nil, EnvCreateOut{}, err
 	}
+	if meta, ok := envdir.ReadMeta(dir); ok {
+		_ = s.Registry.Put(meta)
+	}
 	return nil, EnvCreateOut{Dir: dir, Fingerprint: fp}, nil
 }
 
@@ -174,20 +180,34 @@ func (s *Server) envList(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) 
 }
 
 func (s *Server) listEnvs() []envdir.Meta {
-	out := []envdir.Meta{}
-	entries, err := os.ReadDir(s.User.EnvRoot)
-	if err != nil {
-		return out
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+	byID := map[string]envdir.Meta{}
+	if list, err := s.Registry.List(); err == nil {
+		for _, m := range list {
+			dir := m.Dir
+			if dir == "" {
+				dir = filepath.Join(s.User.EnvRoot, envdir.Name(m.Platform, m.ID))
+			}
+			if _, err := os.Stat(dir); err != nil {
+				_ = s.Registry.Delete(m.ID)
+				continue
+			}
+			byID[m.ID] = m
 		}
-		dir := filepath.Join(s.User.EnvRoot, e.Name())
-		if meta, ok := envdir.ReadMeta(dir); ok {
-			out = append(out, meta)
+	}
+	if list, err := envdir.List(s.User.EnvRoot); err == nil {
+		for _, m := range list {
+			if _, ok := byID[m.ID]; ok {
+				continue
+			}
+			byID[m.ID] = m
+			_ = s.Registry.Put(m)
 		}
 	}
+	out := make([]envdir.Meta, 0, len(byID))
+	for _, m := range byID {
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 

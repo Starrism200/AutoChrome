@@ -97,7 +97,7 @@ func (s *Store) Save(name string, r io.Reader, max int64) (File, error) {
 		safe = "file"
 	}
 	path := filepath.Join(s.root, id+"-"+safe)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return File{}, err
 	}

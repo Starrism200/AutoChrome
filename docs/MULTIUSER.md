@@ -77,7 +77,9 @@ export AUTOCHROME_USER=alice
   "allowed_hosts": [],
   "default_proxy": "socks5://127.0.0.1:10801",
   "vnc_port_start": 20000,
-  "vnc_port_end": 20999
+  "vnc_port_end": 20999,
+  "env_root": "/data/autochrome/envs",
+  "attachment_root": "/data/autochrome/attachments"
 }
 ```
 
@@ -90,6 +92,8 @@ export AUTOCHROME_USER=alice
 | `allowed_hosts` | 预留的域名白名单 |
 | `default_proxy` | 该用户未指定代理时使用 |
 | `vnc_port_start` / `vnc_port_end` | VNC/noVNC 自动分配端口范围，默认 10000–59999 |
+| `env_root` | 环境存储根目录，空则用默认 `profiles/` 或 `data/users/<id>/profiles/` |
+| `attachment_root` | 附件存储根目录，空则用默认目录 |
 
 ## 4. 隔离模型
 

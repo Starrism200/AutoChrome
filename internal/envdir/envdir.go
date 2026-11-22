@@ -81,6 +81,9 @@ func CreateAt(dir, platform, id string, fp fingerprint.Profile) (Meta, error) {
 		return Meta{}, err
 	}
 	if meta, ok := ReadMeta(dir); ok {
+		if meta.ID != "" && meta.ID != id {
+			return Meta{}, fmt.Errorf("directory %q contains environment %q", dir, meta.ID)
+		}
 		return meta, nil
 	}
 	meta := Meta{ID: id, Platform: platform, Dir: dir, CreatedAt: time.Now().Format(time.RFC3339), Fingerprint: fp}
