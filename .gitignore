@@ -1,21 +1,82 @@
 # build output
 /bin/
+/run/
+/dist/
+/build/
+/coverage/
+*.test
+*.out
+*.prof
 
-# runtime data
+# runtime data and local storage
 /data/
 /profiles/
 /tmp/
+/exports/
+/attachments/
+/logs/
+/screenshots/
+/downloads/
+/testdata/
+/config/
+/config.local.sh
+
+# user scripts: keep only the bundled example
+/scripts/custom/*
+!/scripts/custom/example.js
+!/scripts/custom/example.json
+
+# per-user / store files if they appear outside data/
+api_token
+envs.json
+jobs.json
+proxies.json
+schedules.json
+attachments.json
+desktop.json
+user.json
+*.token
 
 # logs and media
 *.log
+*.jsonl
 *.mp4
 *.mov
 *.png
 *.jpg
 *.jpeg
+*.webp
+*.gif
 
-# local environment
-.env
+# archives and installers
+*.deb
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
 
-# browser profile lock
+# temp / locks / sockets
+*.tmp
+.tmp-*
+*.pid
+*.sock
+*.lock
 .autochrome.lock
+
+# local environment, secrets and editor files
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+.DS_Store
+.idea/
+.vscode/
+
+# local databases
+*.db
+*.sqlite
+*.sqlite3
