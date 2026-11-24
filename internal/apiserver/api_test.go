@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"autochrome/internal/fingerprint"
 	"autochrome/internal/jobs"
 	"autochrome/internal/session"
 	"autochrome/internal/users"
@@ -424,6 +425,52 @@ func TestContainerSize(t *testing.T) {
 	}
 	if out.Env.Fingerprint.Width != 1920 || out.Env.Fingerprint.Height != 1080 {
 		t.Fatalf("size = %+v", out)
+	}
+}
+
+func TestContainerFingerprint(t *testing.T) {
+	_, ts := newTestAPI(t)
+	resp, data := request(t, ts, http.MethodPost, "/api/v1/containers", "test-token", map[string]any{"id": "fp", "name": "fp"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d %s", resp.StatusCode, data)
+	}
+	resp, data = request(t, ts, http.MethodPatch, "/api/v1/containers/fp/fingerprint", "test-token", map[string]any{
+		"language":             "fr-FR",
+		"timezone":             "Europe/Paris",
+		"width":                1920,
+		"height":               1080,
+		"color_depth":          30,
+		"pixel_ratio":          1.25,
+		"hardware_concurrency": 8,
+		"device_memory":        16,
+		"restart":              false,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("fingerprint = %d %s", resp.StatusCode, data)
+	}
+	var got struct {
+		Env struct {
+			Fingerprint fingerprint.Profile `json:"fingerprint"`
+		} `json:"env"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	fp := got.Env.Fingerprint
+	if fp.Language != "fr-FR" || fp.AcceptLanguage != "fr-FR,fr" || fp.Timezone != "Europe/Paris" {
+		t.Fatalf("locale = %+v", fp)
+	}
+	if fp.Width != 1920 || fp.Height != 1080 || fp.ColorDepth != 30 || fp.PixelRatio != 1.25 {
+		t.Fatalf("display = %+v", fp)
+	}
+	if fp.HardwareConcurrency != 8 || fp.DeviceMemory != 16 {
+		t.Fatalf("hardware = %+v", fp)
+	}
+	resp, _ = request(t, ts, http.MethodPatch, "/api/v1/containers/fp/fingerprint", "test-token", map[string]any{
+		"timezone": "Not/AZone",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid timezone = %d", resp.StatusCode)
 	}
 }
 

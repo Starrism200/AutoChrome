@@ -187,6 +187,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/envs/{id}/proxy", s.handleEnvBindProxy)
 	mux.HandleFunc("DELETE /api/v1/envs/{id}/proxy", s.handleEnvUnbindProxy)
 	mux.HandleFunc("PUT /api/v1/envs/{id}/size", s.handleEnvSize)
+	mux.HandleFunc("PATCH /api/v1/envs/{id}/fingerprint", s.handleEnvFingerprint)
+	mux.HandleFunc("PUT /api/v1/envs/{id}/fingerprint", s.handleEnvFingerprint)
 	mux.HandleFunc("POST /api/v1/envs/{id}/restart", s.handleEnvRestart)
 	mux.HandleFunc("POST /api/v1/envs/{id}/clean", s.handleEnvClean)
 	mux.HandleFunc("PUT /api/v1/envs/{id}/chrome", s.handleEnvChrome)
@@ -205,6 +207,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/containers/{name}/proxy", s.containerAlias(s.handleEnvBindProxy))
 	mux.HandleFunc("DELETE /api/v1/containers/{name}/proxy", s.containerAlias(s.handleEnvUnbindProxy))
 	mux.HandleFunc("PUT /api/v1/containers/{name}/size", s.containerAlias(s.handleEnvSize))
+	mux.HandleFunc("PATCH /api/v1/containers/{name}/fingerprint", s.containerAlias(s.handleEnvFingerprint))
+	mux.HandleFunc("PUT /api/v1/containers/{name}/fingerprint", s.containerAlias(s.handleEnvFingerprint))
 	mux.HandleFunc("POST /api/v1/containers/{name}/restart", s.containerAlias(s.handleEnvRestart))
 	mux.HandleFunc("POST /api/v1/containers/{name}/clean", s.containerAlias(s.handleEnvClean))
 	mux.HandleFunc("PUT /api/v1/containers/{name}/chrome", s.containerAlias(s.handleEnvChrome))
@@ -1756,6 +1760,179 @@ func (s *Server) handleEnvSize(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publish("env.updated", updated)
 	writeJSON(w, http.StatusOK, map[string]any{"env": updated, "session_id": sessionID})
+}
+
+func (s *Server) handleEnvFingerprint(w http.ResponseWriter, r *http.Request) {
+	meta, dir, ok := s.findEnv(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "env_not_found", "container not found")
+		return
+	}
+	var in struct {
+		Language            *string  `json:"language"`
+		AcceptLanguage      *string  `json:"accept_language"`
+		Timezone            *string  `json:"timezone"`
+		Width               *int     `json:"width"`
+		Height              *int     `json:"height"`
+		ColorDepth          *int     `json:"color_depth"`
+		PixelRatio          *float64 `json:"pixel_ratio"`
+		HardwareConcurrency *int     `json:"hardware_concurrency"`
+		DeviceMemory        *int     `json:"device_memory"`
+		UserAgent           *string  `json:"user_agent"`
+		Platform            *string  `json:"platform"`
+		WebGLVendor         *string  `json:"webgl_vendor"`
+		WebGLRenderer       *string  `json:"webgl_renderer"`
+		Restart             *bool    `json:"restart"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	fp := meta.Fingerprint
+	if fp.UserAgent == "" || fp.Width == 0 || fp.Language == "" {
+		fp = fingerprint.Generate(meta.ID)
+	}
+	if in.Language != nil {
+		lang := strings.TrimSpace(*in.Language)
+		if lang == "" || len(lang) > 64 {
+			writeError(w, http.StatusBadRequest, "invalid_language", "language must be 1-64 characters")
+			return
+		}
+		fp.Language = lang
+		if in.AcceptLanguage == nil {
+			fp.AcceptLanguage = defaultAcceptLanguage(lang)
+		}
+	}
+	if in.AcceptLanguage != nil {
+		accept := strings.TrimSpace(*in.AcceptLanguage)
+		if accept == "" || len(accept) > 256 {
+			writeError(w, http.StatusBadRequest, "invalid_accept_language", "accept_language must be 1-256 characters")
+			return
+		}
+		fp.AcceptLanguage = accept
+	}
+	if in.Timezone != nil {
+		tz := strings.TrimSpace(*in.Timezone)
+		if tz == "" || len(tz) > 64 {
+			writeError(w, http.StatusBadRequest, "invalid_timezone", "timezone must be 1-64 characters")
+			return
+		}
+		if _, err := time.LoadLocation(tz); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_timezone", fmt.Sprintf("unknown IANA timezone %q", tz))
+			return
+		}
+		fp.Timezone = tz
+	}
+	if in.Width != nil {
+		if *in.Width < 800 || *in.Width > 3840 {
+			writeError(w, http.StatusBadRequest, "invalid_width", "width must be 800-3840")
+			return
+		}
+		fp.Width = *in.Width
+	}
+	if in.Height != nil {
+		if *in.Height < 600 || *in.Height > 2160 {
+			writeError(w, http.StatusBadRequest, "invalid_height", "height must be 600-2160")
+			return
+		}
+		fp.Height = *in.Height
+	}
+	if in.ColorDepth != nil {
+		switch *in.ColorDepth {
+		case 16, 24, 30, 32:
+			fp.ColorDepth = *in.ColorDepth
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_color_depth", "color_depth must be 16, 24, 30, or 32")
+			return
+		}
+	}
+	if in.PixelRatio != nil {
+		if *in.PixelRatio < 0.5 || *in.PixelRatio > 4 {
+			writeError(w, http.StatusBadRequest, "invalid_pixel_ratio", "pixel_ratio must be 0.5-4")
+			return
+		}
+		fp.PixelRatio = *in.PixelRatio
+	}
+	if in.HardwareConcurrency != nil {
+		if *in.HardwareConcurrency < 1 || *in.HardwareConcurrency > 256 {
+			writeError(w, http.StatusBadRequest, "invalid_hardware_concurrency", "hardware_concurrency must be 1-256")
+			return
+		}
+		fp.HardwareConcurrency = *in.HardwareConcurrency
+	}
+	if in.DeviceMemory != nil {
+		if *in.DeviceMemory < 1 || *in.DeviceMemory > 128 {
+			writeError(w, http.StatusBadRequest, "invalid_device_memory", "device_memory must be 1-128")
+			return
+		}
+		fp.DeviceMemory = *in.DeviceMemory
+	}
+	if in.UserAgent != nil {
+		ua := strings.TrimSpace(*in.UserAgent)
+		if ua == "" || len(ua) > 1024 {
+			writeError(w, http.StatusBadRequest, "invalid_user_agent", "user_agent must be 1-1024 characters")
+			return
+		}
+		fp.UserAgent = ua
+	}
+	if in.Platform != nil {
+		platform := strings.TrimSpace(*in.Platform)
+		if platform == "" || len(platform) > 128 {
+			writeError(w, http.StatusBadRequest, "invalid_platform", "platform must be 1-128 characters")
+			return
+		}
+		fp.Platform = platform
+	}
+	if in.WebGLVendor != nil {
+		if len(*in.WebGLVendor) > 512 {
+			writeError(w, http.StatusBadRequest, "invalid_webgl_vendor", "webgl_vendor is too long")
+			return
+		}
+		fp.WebGLVendor = *in.WebGLVendor
+	}
+	if in.WebGLRenderer != nil {
+		if len(*in.WebGLRenderer) > 512 {
+			writeError(w, http.StatusBadRequest, "invalid_webgl_renderer", "webgl_renderer is too long")
+			return
+		}
+		fp.WebGLRenderer = *in.WebGLRenderer
+	}
+	updated, err := envdir.SetFingerprintDir(dir, meta, fp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "env_fingerprint_failed", err.Error())
+		return
+	}
+	if err := s.Registry.Put(updated); err != nil {
+		writeError(w, http.StatusInternalServerError, "env_fingerprint_failed", err.Error())
+		return
+	}
+	restart := true
+	if in.Restart != nil {
+		restart = *in.Restart
+	}
+	sessionID := ""
+	if restart {
+		if sess, ok := s.Manager.SessionForEnv(meta.ID); ok {
+			restarted, err := s.Manager.Restart(sess.ID, "")
+			if err != nil {
+				writeError(w, http.StatusBadGateway, "session_restart_failed", err.Error())
+				return
+			}
+			sessionID = restarted.ID
+		}
+	}
+	s.publish("env.updated", updated)
+	writeJSON(w, http.StatusOK, map[string]any{"env": updated, "session_id": sessionID})
+}
+
+func defaultAcceptLanguage(lang string) string {
+	base := lang
+	if i := strings.Index(lang, "-"); i > 0 {
+		base = lang[:i]
+	}
+	if base == lang {
+		return lang
+	}
+	return lang + "," + base
 }
 
 func (s *Server) handleEnvClean(w http.ResponseWriter, r *http.Request) {

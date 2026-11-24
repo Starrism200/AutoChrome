@@ -177,6 +177,13 @@ func Launch(opts Options) (context.Context, func(), error) {
 	return ctx, cleanup, nil
 }
 
+func chromeMajor(userAgent string) string {
+	if m := chromeMajorRe.FindStringSubmatch(userAgent); len(m) == 2 {
+		return m[1]
+	}
+	return ua.ChromeMajor
+}
+
 func emulateDesktop(fp fingerprint.Profile, timezone string) chromedp.Action[chromedp.Void] {
 	return func(ctx context.Context, t *chromedp.Target) (chromedp.Void, error) {
 		if timezone != "" {
@@ -201,6 +208,8 @@ func emulateDesktop(fp fingerprint.Profile, timezone string) chromedp.Action[chr
 		} else if strings.Contains(fp.Platform, "Linux") {
 			platformVersion = "6.5.0"
 		}
+		major := chromeMajor(fp.UserAgent)
+		fullVersion := major + ".0.0.0"
 		_, err = cdp.Call(ctx, t, emulation.SetUserAgentOverride, emulation.SetUserAgentOverrideParams{
 			UserAgent:      fp.UserAgent,
 			AcceptLanguage: fp.AcceptLanguage,
@@ -208,13 +217,13 @@ func emulateDesktop(fp fingerprint.Profile, timezone string) chromedp.Action[chr
 			UserAgentMetadata: &emulation.UserAgentMetadata{
 				Brands: []*emulation.UserAgentBrandVersion{
 					{Brand: "Not_A Brand", Version: "24"},
-					{Brand: "Chromium", Version: ua.ChromeMajor},
-					{Brand: "Google Chrome", Version: ua.ChromeMajor},
+					{Brand: "Chromium", Version: major},
+					{Brand: "Google Chrome", Version: major},
 				},
 				FullVersionList: []*emulation.UserAgentBrandVersion{
 					{Brand: "Not_A Brand", Version: "24.0.0.0"},
-					{Brand: "Chromium", Version: "156.0.8078.79"},
-					{Brand: "Google Chrome", Version: "156.0.8078.79"},
+					{Brand: "Chromium", Version: fullVersion},
+					{Brand: "Google Chrome", Version: fullVersion},
 				},
 				Platform:        metaPlatform(fp.Platform),
 				PlatformVersion: platformVersion,
@@ -226,7 +235,28 @@ func emulateDesktop(fp fingerprint.Profile, timezone string) chromedp.Action[chr
 		if err != nil {
 			return chromedp.Void{}, err
 		}
+		langScript := ""
+		if fp.Language != "" {
+			langScript += fmt.Sprintf("try { Object.defineProperty(navigator, 'language', {get: () => %q, configurable: true}); } catch (e) {}\n", fp.Language)
+		}
+		if fp.AcceptLanguage != "" {
+			parts := strings.Split(fp.AcceptLanguage, ",")
+			langs := make([]string, 0, len(parts))
+			for _, p := range parts {
+				if v := strings.TrimSpace(p); v != "" {
+					langs = append(langs, v)
+				}
+			}
+			if len(langs) > 0 {
+				if b, err := json.Marshal(langs); err == nil {
+					langScript += fmt.Sprintf("try { Object.defineProperty(navigator, 'languages', {get: () => %s, configurable: true}); } catch (e) {}\n", string(b))
+				}
+			}
+		}
 		script := fmt.Sprintf(`(() => {
+  %s
+  try { Object.defineProperty(screen, 'colorDepth', {get: () => %d, configurable: true}); } catch (e) {}
+  try { Object.defineProperty(screen, 'pixelDepth', {get: () => %d, configurable: true}); } catch (e) {}
   try { Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => %d, configurable: true}); } catch (e) {}
   try { Object.defineProperty(navigator, 'deviceMemory', {get: () => %d, configurable: true}); } catch (e) {}
   try {
@@ -242,7 +272,7 @@ func emulateDesktop(fp fingerprint.Profile, timezone string) chromedp.Action[chr
     patch(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
     patch(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
   } catch (e) {}
-})();`, fp.HardwareConcurrency, fp.DeviceMemory, fp.WebGLVendor, fp.WebGLRenderer)
+})();`, langScript, fp.ColorDepth, fp.ColorDepth, fp.HardwareConcurrency, fp.DeviceMemory, fp.WebGLVendor, fp.WebGLRenderer)
 		_, err = cdp.Call(ctx, t, page.AddScriptToEvaluateOnNewDocument, page.AddScriptToEvaluateOnNewDocumentParams{Source: script})
 		return chromedp.Void{}, err
 	}

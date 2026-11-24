@@ -188,6 +188,16 @@ func SetSizeDir(dir string, meta Meta, width, height int) (Meta, error) {
 	return meta, nil
 }
 
+// SetFingerprintDir updates the entire fingerprint profile for an environment.
+func SetFingerprintDir(dir string, meta Meta, fp fingerprint.Profile) (Meta, error) {
+	meta.Fingerprint = fp
+	meta.UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := writeMeta(dir, meta); err != nil {
+		return Meta{}, err
+	}
+	return meta, nil
+}
+
 // SetChromeDir writes a Chrome version binding to an explicit environment.
 func SetChromeDir(dir string, meta Meta, version string) (Meta, error) {
 	meta.ChromeVersion = version

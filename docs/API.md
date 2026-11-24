@@ -122,6 +122,8 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/user
 | PUT | `/api/v1/containers/{name}/chrome` | 绑定 Chrome 版本 |
 | DELETE | `/api/v1/containers/{name}/chrome` | 解绑 Chrome 版本 |
 | PUT | `/api/v1/containers/{name}/size` | 设置浏览器视口，默认重启会话 |
+| PATCH | `/api/v1/containers/{name}/fingerprint` | 修改语言/时区/UA/屏幕等指纹，默认重启会话 |
+| PUT | `/api/v1/containers/{name}/fingerprint` | 同 PATCH |
 | POST | `/api/v1/containers/{name}/restart` | 重新拉起容器浏览器 |
 
 `id` 创建后不可变；`name` 可修改且在同一用户下唯一。目录名由 `id` 决定，
@@ -144,6 +146,44 @@ curl -X PUT -H "$H" -H 'Content-Type: application/json' \
 默认浏览器视口是 `1366x900`，可设置为 `1920x1080`。**noVNC 画布大小仍是
 该用户进程的 Xvfb 屏幕**，默认 `1920x1080`，启动时可用
 `--vnc-screen 1366x900x24` 覆盖；当前不是每容器独立画布。
+
+容器指纹接口：
+
+```bash
+curl -X PATCH -H "$H" -H 'Content-Type: application/json' \
+  -d '{
+    "language": "fr-FR",
+    "accept_language": "fr-FR,fr,en",
+    "timezone": "Europe/Paris",
+    "width": 1920,
+    "height": 1080,
+    "color_depth": 24,
+    "pixel_ratio": 1,
+    "hardware_concurrency": 8,
+    "device_memory": 8,
+    "webgl_vendor": "Google Inc. (Intel)",
+    "webgl_renderer": "ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)",
+    "restart": true
+  }' \
+  "$BASE/containers/demo/fingerprint"
+```
+
+所有字段可选，未传字段保持当前值。修改后默认关闭并重启现有会话；没有会话时
+只更新配置，下一次打开生效。`restart:false` 可只更新配置。
+
+当前指纹应用方式：
+
+- 语言：Chrome `--lang`、`--accept-lang`，并通过 CDP
+  `Emulation.setUserAgentOverride` 和页面脚本设置 `navigator.language/languages`
+- 时区：CDP `Emulation.setTimezoneOverride`
+- 屏幕：`--window-size` + CDP `Emulation.setDeviceMetricsOverride`
+- UA/平台/UA-CH：`--user-agent` + CDP `Emulation.setUserAgentOverride`，UA-CH
+  的品牌版本从 UA 里的 Chrome 主版本推导
+- `hardwareConcurrency`、`deviceMemory`、WebGL vendor/renderer、screen
+  `colorDepth/pixelDepth`：新文档注入脚本覆盖
+
+注意：Canvas、Audio、字体列表、TLS/JA3、GPU 驱动层没有做完整伪造；WebGL
+只是字符串级覆盖。时区必须是 IANA 名称，例如 `Asia/Shanghai`。
 
 ### 环境打包
 
@@ -292,8 +332,9 @@ Network/Cookies、`Local State` 和 `env.json`。
 | GET | `/api/v1/sessions/{id}/auth/export?download=1` | 以文件形式下载 |
 | POST | `/api/v1/sessions/{id}/auth/import` | multipart `file` 导入 JSON |
 
-UA 通过 CDP `Emulation.setUserAgentOverride` 设置，属于字符串级覆盖；不会自动
-重建 UA-CH 等更细的客户端提示。
+导入 UA 时会通过 CDP `Emulation.setUserAgentOverride` 设置，并根据 UA 中的
+Chrome 主版本重建 UA-CH；该接口只影响当前会话，不写入容器指纹。要持久化语言/
+时区/UA，请使用 `/containers/{name}/fingerprint`。
 
 导出格式：
 

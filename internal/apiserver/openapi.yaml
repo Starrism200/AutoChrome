@@ -243,6 +243,40 @@ paths:
       summary: Unbind Chrome version from container
       responses:
         "200": { description: Container }
+  /containers/{name}/fingerprint:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      summary: Update container fingerprint
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                language: { type: string }
+                accept_language: { type: string }
+                timezone: { type: string }
+                width: { type: integer }
+                height: { type: integer }
+                color_depth: { type: integer }
+                pixel_ratio: { type: number }
+                hardware_concurrency: { type: integer }
+                device_memory: { type: integer }
+                user_agent: { type: string }
+                platform: { type: string }
+                webgl_vendor: { type: string }
+                webgl_renderer: { type: string }
+                restart: { type: boolean }
+      responses:
+        "200": { description: Container and restarted session id }
+    put:
+      summary: Update container fingerprint
+      responses:
+        "200": { description: Container and restarted session id }
   /containers/{name}/clean:
     parameters:
       - name: name
