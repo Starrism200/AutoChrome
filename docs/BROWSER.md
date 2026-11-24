@@ -63,7 +63,11 @@ profiles/default-account-01/
     "hardware_concurrency": 8,
     "device_memory": 8,
     "webgl_vendor": "Google Inc. (NVIDIA)",
-    "webgl_renderer": "ANGLE (...)"
+    "webgl_renderer": "ANGLE (...)",
+    "canvas_noise": 0.15,
+    "audio_noise": 0.1,
+    "font_set": "minimal",
+    "font_whitelist": []
   }
 }
 ```
@@ -83,9 +87,12 @@ profiles/default-account-01/
 - 时区
 - 屏幕分辨率与 `devicePixelRatio`
 - CPU 核心数、设备内存
+- Canvas/Audio 噪声强度
+- 字体集合（`font_set`）和显式字体白名单
 
 同一个 seed 永远得到同一份指纹。`open` 会优先读取 `env.json` 中的指纹，
-不存在时才重新生成，因此环境迁移后身份不漂移。
+不存在时才重新生成，因此环境迁移后身份不漂移。新容器默认
+`canvas_noise=0.15`、`audio_noise=0.1`、`font_set=minimal`。
 
 启动后通过 CDP 应用：
 
@@ -94,9 +101,15 @@ profiles/default-account-01/
 - `Emulation.setUserAgentOverride`（含 UA-CH）
 - `Page.addScriptToEvaluateOnNewDocument` 覆盖
   `navigator.hardwareConcurrency`、`navigator.deviceMemory`、WebGL
-  `getParameter(37445/37446)`
+  `getParameter(37445/37446)`、`navigator.language/languages`、
+  `screen.colorDepth/pixelDepth`
+- Canvas/OffscreenCanvas/WebGL `readPixels` 稳定微噪声
+- `AudioBuffer` / `AnalyserNode` 稳定微噪声
+- 每容器生成 `fontconfig/fonts.conf`，Chrome 通过 `FONTCONFIG_FILE` 使用独立
+  字体白名单，`fonts/` 中是字体文件软链接，`cache/` 是独立 fontconfig 缓存
 
-> 注意：这些是应用层伪装，无法改变真实的 TLS/JA3、GPU、字体、音频等底层特征。
+> Canvas/Audio 是页面脚本覆盖，Worker/OOPIF 尚未完整覆盖。字体隔离只控制
+> 字体集合和别名，TLS/JA3/JA4、GPU 驱动层仍无法通过该方案完整伪造。
 
 ## 5. Chrome 启动参数
 
@@ -120,6 +133,10 @@ profiles/default-account-01/
 | `--disable-component-update` 等 | 关闭后台组件/崩溃上报/同步 |
 | `--proxy-server` | 可选，绑定代理 |
 | `--headless=new` | 仅在 `-headless` 时启用 |
+| `FONTCONFIG_FILE` / `FONTCONFIG_PATH` | 每容器独立字体配置，通过进程环境传入 |
+
+字体配置由 `internal/fontconfig` 生成；共用同一个 Chrome 二进制，但每个活跃
+容器有独立 Chrome 进程和 `FONTCONFIG_FILE`。
 
 `/dev/shm/autochrome-cache/<env>` 用作临时磁盘缓存，退出时删除。
 

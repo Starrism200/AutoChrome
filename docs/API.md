@@ -161,6 +161,10 @@ curl -X PATCH -H "$H" -H 'Content-Type: application/json' \
     "pixel_ratio": 1,
     "hardware_concurrency": 8,
     "device_memory": 8,
+    "canvas_noise": 0.15,
+    "audio_noise": 0.1,
+    "font_set": "minimal",
+    "font_whitelist": ["Arial", "Noto Sans"],
     "webgl_vendor": "Google Inc. (Intel)",
     "webgl_renderer": "ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)",
     "restart": true
@@ -181,9 +185,21 @@ curl -X PATCH -H "$H" -H 'Content-Type: application/json' \
   的品牌版本从 UA 里的 Chrome 主版本推导
 - `hardwareConcurrency`、`deviceMemory`、WebGL vendor/renderer、screen
   `colorDepth/pixelDepth`：新文档注入脚本覆盖
+- `canvas_noise`：0-1，按容器种子对 Canvas/OffscreenCanvas/WebGL readPixels
+  做稳定微噪声；同容器结果稳定，不同容器不同
+- `audio_noise`：0-1，对 `AudioBuffer` 和 `AnalyserNode` 做稳定微噪声
+- `font_set`：`system`、`minimal`、`linux`、`windows`、`macos` 或 `custom`
+- `font_whitelist`：显式字体家族列表，优先级高于 `font_set`；`custom` 必须提供
+- 字体隔离会生成 `<容器目录>/fontconfig/fonts.conf`、`fonts/` 和 `cache/`，
+  并通过 `FONTCONFIG_FILE` 只传给该容器的 Chrome 进程
 
-注意：Canvas、Audio、字体列表、TLS/JA3、GPU 驱动层没有做完整伪造；WebGL
-只是字符串级覆盖。时区必须是 IANA 名称，例如 `Asia/Shanghai`。
+新容器默认 `canvas_noise=0.15`、`audio_noise=0.1`、`font_set=minimal`；已有
+容器保持原配置，需要显式 PATCH 后重启会话。
+
+注意：Canvas/Audio 是页面级脚本覆盖，Worker/OOPIF 尚未完整覆盖；字体只能
+控制可用字体集合和别名，不能完全模拟 Windows/macOS 的光栅化。TLS/JA3/JA4、
+GPU 驱动层仍无法通过该接口完整伪造；WebGL 只是字符串级覆盖。时区必须是
+IANA 名称，例如 `Asia/Shanghai`。
 
 ### 环境打包
 

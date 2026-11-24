@@ -24,19 +24,23 @@ type osProfile struct {
 
 // Profile is the browser identity applied to one environment.
 type Profile struct {
-	UserAgent           string  `json:"user_agent"`
-	Platform            string  `json:"platform"`
-	Language            string  `json:"language"`
-	AcceptLanguage      string  `json:"accept_language"`
-	Timezone            string  `json:"timezone"`
-	Width               int     `json:"width"`
-	Height              int     `json:"height"`
-	ColorDepth          int     `json:"color_depth"`
-	PixelRatio          float64 `json:"pixel_ratio"`
-	HardwareConcurrency int     `json:"hardware_concurrency"`
-	DeviceMemory        int     `json:"device_memory"`
-	WebGLVendor         string  `json:"webgl_vendor"`
-	WebGLRenderer       string  `json:"webgl_renderer"`
+	UserAgent           string   `json:"user_agent"`
+	Platform            string   `json:"platform"`
+	Language            string   `json:"language"`
+	AcceptLanguage      string   `json:"accept_language"`
+	Timezone            string   `json:"timezone"`
+	Width               int      `json:"width"`
+	Height              int      `json:"height"`
+	ColorDepth          int      `json:"color_depth"`
+	PixelRatio          float64  `json:"pixel_ratio"`
+	HardwareConcurrency int      `json:"hardware_concurrency"`
+	DeviceMemory        int      `json:"device_memory"`
+	WebGLVendor         string   `json:"webgl_vendor"`
+	WebGLRenderer       string   `json:"webgl_renderer"`
+	CanvasNoise         float64  `json:"canvas_noise,omitempty"`
+	AudioNoise          float64  `json:"audio_noise,omitempty"`
+	FontSet             string   `json:"font_set,omitempty"`
+	FontWhitelist       []string `json:"font_whitelist,omitempty"`
 }
 
 var osProfiles = []osProfile{
@@ -124,6 +128,9 @@ func Generate(seed string) Profile {
 		DeviceMemory:        memory[next(len(memory))],
 		WebGLVendor:         o.WebGLVendor,
 		WebGLRenderer:       o.WebGLRenderer,
+		CanvasNoise:         0.15,
+		AudioNoise:          0.10,
+		FontSet:             "minimal",
 	}
 }
 

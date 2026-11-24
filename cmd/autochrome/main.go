@@ -26,6 +26,7 @@ import (
 	"autochrome/internal/desktop"
 	"autochrome/internal/envdir"
 	"autochrome/internal/fingerprint"
+	"autochrome/internal/fontconfig"
 	"autochrome/internal/jsruntime"
 	"autochrome/internal/maintenance"
 	"autochrome/internal/mcpserver"
@@ -294,6 +295,12 @@ func cmdOpen(args []string) {
 		proxyAddr = u.DefaultProxy
 	}
 
+	fonts, err := fontconfig.Prepare(dir, fp.FontSet, fp.FontWhitelist)
+	if err != nil {
+		log.Fatalf("font config: %v", err)
+	}
+	displayEnv = append(displayEnv, fonts.Env...)
+
 	ctx, cleanup, err := browser.Launch(browser.Options{
 		ChromePath:  chromePath,
 		ProfileDir:  dir,
@@ -305,6 +312,7 @@ func cmdOpen(args []string) {
 		SlotMax:     max,
 		Env:         displayEnv,
 		DownloadDir: meta.DownloadDir,
+		Seed:        *id,
 	})
 	if err != nil {
 		log.Fatalf("launch browser: %v", err)

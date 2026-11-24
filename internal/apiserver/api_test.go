@@ -443,6 +443,10 @@ func TestContainerFingerprint(t *testing.T) {
 		"pixel_ratio":          1.25,
 		"hardware_concurrency": 8,
 		"device_memory":        16,
+		"canvas_noise":         0.15,
+		"audio_noise":          0.1,
+		"font_set":             "minimal",
+		"font_whitelist":       []string{"Arial", "Noto Sans"},
 		"restart":              false,
 	})
 	if resp.StatusCode != http.StatusOK {
@@ -466,11 +470,43 @@ func TestContainerFingerprint(t *testing.T) {
 	if fp.HardwareConcurrency != 8 || fp.DeviceMemory != 16 {
 		t.Fatalf("hardware = %+v", fp)
 	}
-	resp, _ = request(t, ts, http.MethodPatch, "/api/v1/containers/fp/fingerprint", "test-token", map[string]any{
-		"timezone": "Not/AZone",
+	if fp.CanvasNoise != 0.15 || fp.AudioNoise != 0.1 || fp.FontSet != "minimal" {
+		t.Fatalf("privacy = %+v", fp)
+	}
+	if len(fp.FontWhitelist) != 2 || fp.FontWhitelist[0] != "Arial" {
+		t.Fatalf("font whitelist = %+v", fp)
+	}
+	resp, data = request(t, ts, http.MethodPatch, "/api/v1/containers/fp/fingerprint", "test-token", map[string]any{
+		"font_set": "system", "restart": false,
 	})
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("invalid timezone = %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reset fonts = %d %s", resp.StatusCode, data)
+	}
+	var reset struct {
+		Env struct {
+			Fingerprint fingerprint.Profile `json:"fingerprint"`
+		} `json:"env"`
+	}
+	if err := json.Unmarshal(data, &reset); err != nil {
+		t.Fatal(err)
+	}
+	if reset.Env.Fingerprint.FontSet != "system" || len(reset.Env.Fingerprint.FontWhitelist) != 0 {
+		t.Fatalf("font reset = %+v", reset.Env.Fingerprint)
+	}
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"timezone", map[string]any{"timezone": "Not/AZone"}},
+		{"canvas", map[string]any{"canvas_noise": 1.5}},
+		{"audio", map[string]any{"audio_noise": -0.1}},
+		{"font_set", map[string]any{"font_set": "bogus"}},
+		{"font_custom", map[string]any{"font_set": "custom", "font_whitelist": []string{}}},
+	} {
+		resp, data := request(t, ts, http.MethodPatch, "/api/v1/containers/fp/fingerprint", "test-token", tc.body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s = %d %s", tc.name, resp.StatusCode, data)
+		}
 	}
 }
 

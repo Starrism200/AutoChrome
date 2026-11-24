@@ -15,7 +15,8 @@ English | [简体中文](README.zh-CN.md)
 - Containers/environments with unique name + id and an isolated directory
 - Create, update, inspect, delete, import and export containers
 - Generate a deterministic fingerprint per environment (UA, UA-CH, timezone,
-  locale, screen, WebGL, CPU and memory)
+  locale, screen, WebGL, CPU/memory, Canvas/Audio noise and fonts)
+- Per-container fontconfig isolation and stable Canvas/Audio fingerprint noise
 - Launch headed Chrome through `xvfb-run` when no display is available
 - Optional per-environment proxy
 - Cross-process browser concurrency limit using `flock` slots
@@ -269,6 +270,7 @@ internal/attachments/  Generic attachment store
 internal/cleaner/      Safe cache/history/download cleanup
 internal/maintenance/  Close-clean-reopen coordination
 internal/fingerprint/  Deterministic fingerprint generation
+internal/fontconfig/   Per-container fontconfig and font whitelists
 internal/users/        Per-user directories, quotas and permissions
 internal/session/      Long-lived browser sessions
 internal/jsruntime/    Embedded JavaScript SDK (goja)

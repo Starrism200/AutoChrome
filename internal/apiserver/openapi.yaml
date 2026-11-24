@@ -266,6 +266,14 @@ paths:
                 pixel_ratio: { type: number }
                 hardware_concurrency: { type: integer }
                 device_memory: { type: integer }
+                canvas_noise: { type: number, minimum: 0, maximum: 1 }
+                audio_noise: { type: number, minimum: 0, maximum: 1 }
+                font_set:
+                  type: string
+                  enum: [system, minimal, linux, windows, macos, custom]
+                font_whitelist:
+                  type: array
+                  items: { type: string }
                 user_agent: { type: string }
                 platform: { type: string }
                 webgl_vendor: { type: string }

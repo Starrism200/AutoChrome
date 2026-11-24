@@ -39,6 +39,7 @@ type Options struct {
 	SlotWait    time.Duration
 	Env         []string
 	DownloadDir string
+	Seed        string
 }
 
 // Launch starts a browser for one account and returns its context plus a
@@ -170,7 +171,11 @@ func Launch(opts Options) (context.Context, func(), error) {
 		releaseSlot()
 		releaseProfile()
 	}
-	if err := chromedp.Do(ctx, emulateDesktop(fp, opts.Timezone)); err != nil {
+	seed := opts.Seed
+	if seed == "" {
+		seed = opts.ProfileDir
+	}
+	if err := chromedp.Do(ctx, emulateDesktop(fp, opts.Timezone, seed)); err != nil {
 		cleanup()
 		return nil, nil, err
 	}
@@ -184,7 +189,7 @@ func chromeMajor(userAgent string) string {
 	return ua.ChromeMajor
 }
 
-func emulateDesktop(fp fingerprint.Profile, timezone string) chromedp.Action[chromedp.Void] {
+func emulateDesktop(fp fingerprint.Profile, timezone, seed string) chromedp.Action[chromedp.Void] {
 	return func(ctx context.Context, t *chromedp.Target) (chromedp.Void, error) {
 		if timezone != "" {
 			if _, err := cdp.Call(ctx, t, emulation.SetTimezoneOverride, emulation.SetTimezoneOverrideParams{TimezoneID: timezone}); err != nil {
@@ -255,6 +260,7 @@ func emulateDesktop(fp fingerprint.Profile, timezone string) chromedp.Action[chr
 		}
 		script := fmt.Sprintf(`(() => {
   %s
+  %s
   try { Object.defineProperty(screen, 'colorDepth', {get: () => %d, configurable: true}); } catch (e) {}
   try { Object.defineProperty(screen, 'pixelDepth', {get: () => %d, configurable: true}); } catch (e) {}
   try { Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => %d, configurable: true}); } catch (e) {}
@@ -272,7 +278,7 @@ func emulateDesktop(fp fingerprint.Profile, timezone string) chromedp.Action[chr
     patch(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
     patch(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
   } catch (e) {}
-})();`, langScript, fp.ColorDepth, fp.ColorDepth, fp.HardwareConcurrency, fp.DeviceMemory, fp.WebGLVendor, fp.WebGLRenderer)
+})();`, langScript, privacyScript(fp, seed), fp.ColorDepth, fp.ColorDepth, fp.HardwareConcurrency, fp.DeviceMemory, fp.WebGLVendor, fp.WebGLRenderer)
 		_, err = cdp.Call(ctx, t, page.AddScriptToEvaluateOnNewDocument, page.AddScriptToEvaluateOnNewDocumentParams{Source: script})
 		return chromedp.Void{}, err
 	}

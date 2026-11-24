@@ -19,6 +19,7 @@ import (
 	chromepkg "autochrome/internal/chrome"
 	"autochrome/internal/envdir"
 	"autochrome/internal/fingerprint"
+	"autochrome/internal/fontconfig"
 	"autochrome/internal/users"
 	"autochrome/internal/xvfb"
 )
@@ -243,6 +244,11 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool, chrome
 		}
 		env = d.Env()
 	}
+	fonts, err := fontconfig.Prepare(dir, fp.FontSet, fp.FontWhitelist)
+	if err != nil {
+		return nil, err
+	}
+	env = append(env, fonts.Env...)
 
 	ctx, cleanup, err := browser.Launch(browser.Options{
 		ChromePath:  chromePath,
@@ -255,6 +261,7 @@ func (m *Manager) Open(envID, platform, url, proxy string, headless bool, chrome
 		SlotMax:     user.BrowserMax(),
 		Env:         env,
 		DownloadDir: meta.DownloadDir,
+		Seed:        envID,
 	})
 	if err != nil {
 		return nil, err

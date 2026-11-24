@@ -12,7 +12,8 @@
 - 一键升级 Chrome / 系统依赖并重新编译（`update.sh`）
 - 容器/环境有唯一 name/id 和独立目录
 - 支持容器新增、修改、查询、删除、导入、导出
-- 基于种子确定性生成浏览器指纹（UA、UA-CH、时区、语言、屏幕、WebGL、CPU/内存）
+- 基于种子确定性生成浏览器指纹（UA、UA-CH、时区、语言、屏幕、WebGL、CPU/内存、Canvas/Audio 噪声、字体）
+- 每容器独立 fontconfig 字体隔离和稳定的 Canvas/Audio 指纹噪声
 - 在没有物理显示器时自动用 `xvfb-run` 启动有头 Chrome
 - 支持按环境绑定代理
 - 跨进程浏览器并发上限（`flock` 槽位）
@@ -257,6 +258,7 @@ internal/attachments/  通用附件存储
 internal/cleaner/      安全的缓存/历史/下载清理
 internal/maintenance/  关闭-清理-重启协调
 internal/fingerprint/  确定性浏览器指纹生成
+internal/fontconfig/   每容器 fontconfig 与字体白名单
 internal/users/        用户目录、配额与权限
 internal/session/      长生命周期浏览器会话
 internal/jsruntime/    嵌入式 JavaScript SDK（goja）

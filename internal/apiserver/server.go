@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -34,6 +35,7 @@ import (
 	"autochrome/internal/envdir"
 	"autochrome/internal/filelock"
 	"autochrome/internal/fingerprint"
+	"autochrome/internal/fontconfig"
 	"autochrome/internal/jobs"
 	"autochrome/internal/jsruntime"
 	"autochrome/internal/maintenance"
@@ -1769,20 +1771,24 @@ func (s *Server) handleEnvFingerprint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Language            *string  `json:"language"`
-		AcceptLanguage      *string  `json:"accept_language"`
-		Timezone            *string  `json:"timezone"`
-		Width               *int     `json:"width"`
-		Height              *int     `json:"height"`
-		ColorDepth          *int     `json:"color_depth"`
-		PixelRatio          *float64 `json:"pixel_ratio"`
-		HardwareConcurrency *int     `json:"hardware_concurrency"`
-		DeviceMemory        *int     `json:"device_memory"`
-		UserAgent           *string  `json:"user_agent"`
-		Platform            *string  `json:"platform"`
-		WebGLVendor         *string  `json:"webgl_vendor"`
-		WebGLRenderer       *string  `json:"webgl_renderer"`
-		Restart             *bool    `json:"restart"`
+		Language            *string   `json:"language"`
+		AcceptLanguage      *string   `json:"accept_language"`
+		Timezone            *string   `json:"timezone"`
+		Width               *int      `json:"width"`
+		Height              *int      `json:"height"`
+		ColorDepth          *int      `json:"color_depth"`
+		PixelRatio          *float64  `json:"pixel_ratio"`
+		HardwareConcurrency *int      `json:"hardware_concurrency"`
+		DeviceMemory        *int      `json:"device_memory"`
+		CanvasNoise         *float64  `json:"canvas_noise"`
+		AudioNoise          *float64  `json:"audio_noise"`
+		FontSet             *string   `json:"font_set"`
+		FontWhitelist       *[]string `json:"font_whitelist"`
+		UserAgent           *string   `json:"user_agent"`
+		Platform            *string   `json:"platform"`
+		WebGLVendor         *string   `json:"webgl_vendor"`
+		WebGLRenderer       *string   `json:"webgl_renderer"`
+		Restart             *bool     `json:"restart"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -1865,6 +1871,46 @@ func (s *Server) handleEnvFingerprint(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fp.DeviceMemory = *in.DeviceMemory
+	}
+	if in.CanvasNoise != nil {
+		v := *in.CanvasNoise
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
+			writeError(w, http.StatusBadRequest, "invalid_canvas_noise", "canvas_noise must be 0-1")
+			return
+		}
+		fp.CanvasNoise = v
+	}
+	if in.AudioNoise != nil {
+		v := *in.AudioNoise
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
+			writeError(w, http.StatusBadRequest, "invalid_audio_noise", "audio_noise must be 0-1")
+			return
+		}
+		fp.AudioNoise = v
+	}
+	if in.FontSet != nil {
+		set := strings.ToLower(strings.TrimSpace(*in.FontSet))
+		if set == "" {
+			set = "system"
+		}
+		fp.FontSet = set
+		if in.FontWhitelist == nil && set != "custom" {
+			fp.FontWhitelist = nil
+		}
+	}
+	if in.FontWhitelist != nil {
+		families := make([]string, 0, len(*in.FontWhitelist))
+		for _, family := range *in.FontWhitelist {
+			family = strings.TrimSpace(family)
+			if family != "" {
+				families = append(families, family)
+			}
+		}
+		fp.FontWhitelist = families
+	}
+	if err := fontconfig.Validate(fp.FontSet, fp.FontWhitelist); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_font_config", err.Error())
+		return
 	}
 	if in.UserAgent != nil {
 		ua := strings.TrimSpace(*in.UserAgent)
